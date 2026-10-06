@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1f6f4a">
+<title>Digitalab – Prototype phase 1</title>
+<style>
+  :root{
+    --bg:#f6f4ef; --card:#fff; --ink:#1d2421; --muted:#5f6b65; --line:#e2ded3; --brand:#1f6f4a;
+    --vert:#2e8b57; --jaune:#d9a400; --orange:#e07b00; --rouge:#c62828;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14181a; --card:#1d2326; --ink:#eef1ef; --muted:#9aa7a0; --line:#2c3438; --brand:#3fae7a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:84px}
+  header{background:var(--brand);color:#fff;padding:14px 16px;position:sticky;top:0;z-index:5}
+  header h1{margin:0;font-size:18px} header small{opacity:.85}
+  main{max-width:640px;margin:0 auto;padding:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .tile b{display:block;font-size:26px} .tile span{color:var(--muted);font-size:13px}
+  h2{font-size:16px;margin:18px 0 8px} h3{margin:0 0 6px;font-size:16px}
+  .banner{border-radius:12px;padding:14px;color:#fff;font-weight:600;margin-bottom:12px}
+  .l-vert{--c:var(--vert)} .l-jaune{--c:var(--jaune)} .l-orange{--c:var(--orange)} .l-rouge{--c:var(--rouge)}
+  .banner{background:var(--c)}
+  .alert{border-left:6px solid var(--c);}
+  .badge{display:inline-block;background:var(--c);color:#fff;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:700;margin-right:6px}
+  .alert p{margin:4px 0 0;color:var(--muted);font-size:14px}
+  .big{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:10px;font-size:17px;color:var(--ink);cursor:pointer}
+  .big span{display:block;color:var(--muted);font-size:13px}
+  nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--line);display:flex;z-index:6}
+  nav button{flex:1;background:none;border:0;padding:10px 4px 12px;font-size:12px;color:var(--muted);cursor:pointer}
+  nav button b{display:block;font-size:20px} nav button.on{color:var(--brand);font-weight:700}
+  label{display:block;margin:10px 0 4px;font-size:14px;color:var(--muted)}
+  select,input,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--card);color:var(--ink)}
+  .btn{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:14px;font-size:16px;font-weight:700;width:100%;margin-top:14px;cursor:pointer}
+  .btn.alt{background:none;color:var(--brand);border:1px solid var(--brand)}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .muted{color:var(--muted);font-size:13px}
+  .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:999px;z-index:9;font-size:14px}
+  .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12px;color:var(--muted)}
+  .shared{border:2px dashed var(--brand)}
+  a.link{color:var(--brand);cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+<header><h1>Digitalab <small>· Ferme de démonstration</small></h1><small id="today"></small></header>
+<main id="app"></main>
+<nav id="nav"></nav>
+
+<script>
+/* Prototype de la phase 1 : données fictives conservées sur ce téléphone (localStorage).
+   Les seuils d'alerte sont des exemples à valider avec un vétérinaire (voir cahier des charges, section 5). */
+const KEY = 'digitalab-proto-v1';
+const iso = (d) => d.toISOString().slice(0, 10);
+const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+const TODAY = iso(new Date());
+
+// Seuils de départ par type (m² minimum par oiseau). À valider par race.
+const SEUILS = { poule: { m2PerBird: 0.25, label: 'poule' }, caille: { m2PerBird: 0.015, label: 'caille' } };
+
+function seed() {
+  return {
+    logements: [
+      { id: 'L1', nom: 'Poulailler 1', m2: 8 },
+      { id: 'L2', nom: 'Batterie cailles A', m2: 1.0 },
+    ],
+    stockAlimentKg: 60,
+    lots: [
+      { id: 'a', nom: 'Soie blanche – Lot A', type: 'poule', logement: 'L1', effectif: 18, naissance: daysAgo(210),
+        ponte: { [daysAgo(3)]: 9, [daysAgo(2)]: 10, [daysAgo(1)]: 9 }, aliment: { [daysAgo(1)]: 2.4, [daysAgo(2)]: 2.4, [daysAgo(3)]: 2.3 },
+        deces: [], sante: [{ date: daysAgo(40), type: 'Vaccin', txt: 'Newcastle (rappel)', echeance: daysAgo(-2) }] },
+      { id: 'b', nom: 'Brahma reproducteurs', type: 'poule', logement: 'L1', effectif: 10, naissance: daysAgo(400),
+        ponte: { [daysAgo(3)]: 4, [daysAgo(2)]: 4, [daysAgo(1)]: 5 }, aliment: { [daysAgo(1)]: 1.8, [daysAgo(2)]: 1.7, [daysAgo(3)]: 1.8 },
+        deces: [], sante: [{ date: daysAgo(90), type: 'Vaccin', txt: 'Gumboro', echeance: daysAgo(1) }] },
+      { id: 'c', nom: 'Cailles japonaises – Lot 1', type: 'caille', logement: 'L2', effectif: 60, naissance: daysAgo(75),
+        ponte: { [daysAgo(3)]: 48, [daysAgo(2)]: 50, [daysAgo(1)]: 49 }, aliment: { [daysAgo(1)]: 1.5, [daysAgo(2)]: 1.5, [daysAgo(3)]: 1.4 },
+        deces: [], sante: [] },
+    ],
+    journal: [],
+  };
+}
+let S = load();
+function load() { try { return JSON.parse(localStorage.getItem(KEY)) || seed(); } catch (e) { return seed(); } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+// ---------- Moteur d'alertes (règles simples, niveaux de couleur) ----------
+const LV = { vert: 0, jaune: 1, orange: 2, rouge: 3 };
+const NOM = { vert: 'Normal', jaune: 'À surveiller', orange: 'Action aujourd’hui', rouge: 'Urgence' };
+function lot(id) { return S.lots.find(l => l.id === id); }
+function sum(o) { return Object.values(o).reduce((a, b) => a + b, 0); }
+function avgPrev(l, days) {
+  const v = []; for (let i = 1; i <= days; i++) { const x = l.ponte[daysAgo(i)]; if (x != null) v.push(x); }
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+}
+function conso7j() { let t = 0; S.lots.forEach(l => { for (let i = 0; i < 7; i++) t += l.aliment[daysAgo(i)] || 0; }); return t / 7; }
+function alerts() {
+  const A = [];
+  S.logements.forEach(lg => {
+    const lots = S.lots.filter(l => l.logement === lg.id);
+    const need = lots.reduce((a, l) => a + l.effectif * SEUILS[l.type].m2PerBird, 0);
+    const r = need / lg.m2;
+    const pct = Math.round(r * 100);
+    if (r >= 1) A.push({ n: 'rouge', t: `Surdensité : ${lg.nom}`, d: `${pct} % de la limite. Retirez ou transférez des oiseaux.` });
+    else if (r >= 0.9) A.push({ n: 'orange', t: `Densité élevée : ${lg.nom}`, d: `${pct} % de la limite, bientôt plein.` });
+    else if (r >= 0.8) A.push({ n: 'jaune', t: `Densité à surveiller : ${lg.nom}`, d: `${pct} % de la limite.` });
+  });
+  S.lots.forEach(l => {
+    const dToday = l.deces.filter(x => x.date === TODAY).reduce((a, x) => a + x.n, 0);
+    const taux = dToday / (l.effectif + dToday || 1) * 100;
+    if (dToday && taux >= 2) A.push({ n: 'rouge', t: `Mortalité élevée : ${l.nom}`, d: `${dToday} mort(s) aujourd’hui (${taux.toFixed(1)} %). Isolez et observez les symptômes.` });
+    else if (dToday && taux >= 1) A.push({ n: 'orange', t: `Mortalité à contrôler : ${l.nom}`, d: `${dToday} mort(s) aujourd’hui (${taux.toFixed(1)} %).` });
+    const pt = l.ponte[TODAY], moy = avgPrev(l, 3);
+    if (pt != null && moy > 0 && pt < 0.85 * moy) A.push({ n: 'orange', t: `Chute de ponte : ${l.nom}`, d: `${pt} œufs aujourd’hui contre ${moy.toFixed(0)} en moyenne sur 3 jours.` });
+    l.sante.forEach(s => {
+      if (!s.echeance || s.fait) return;
+      const diff = Math.round((new Date(s.echeance) - new Date(TODAY)) / 864e5);
+      if (diff < 0) A.push({ n: 'rouge', t: `${s.type} en retard : ${l.nom}`, d: `${s.txt}, prévu le ${s.echeance}.`, lot: l.id, s });
+      else if (diff <= 3) A.push({ n: 'jaune', t: `${s.type} à faire : ${l.nom}`, d: `${s.txt}, dans ${diff} jour(s).`, lot: l.id, s });
+    });
+  });
+  const c = conso7j(), autonomie = c ? S.stockAlimentKg / c : 99;
+  if (autonomie < 3) A.push({ n: 'orange', t: 'Stock d’aliment très bas', d: `Environ ${autonomie.toFixed(1)} jour(s) restant(s).` });
+  else if (autonomie < 7) A.push({ n: 'jaune', t: 'Stock d’aliment à renouveler', d: `Environ ${autonomie.toFixed(1)} jours restants.` });
+  return A.sort((a, b) => LV[b.n] - LV[a.n]);
+}
+const worst = (A) => A.length ? A[0].n : 'vert';
+
+// ---------- Interface ----------
+let tab = 'accueil', view = null;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function toast(m) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = m; document.body.appendChild(t); setTimeout(() => t.remove(), 2200); }
+function go(t, v) { tab = t; view = v || null; render(); window.scrollTo(0, 0); }
+
+function renderNav() {
+  const items = [['accueil', '🏠', 'Accueil'], ['saisie', '✍️', 'Saisie'], ['cheptel', '🐔', 'Cheptel'], ['alertes', '🔔', 'Alertes']];
+  $('#nav').innerHTML = items.map(([k, i, l]) => `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')"><b>${i}</b>${l}</button>`).join('');
+}
+const alertCard = (a) => `<div class="card alert l-${a.n}"><span class="badge l-${a.n}">${NOM[a.n]}</span><b>${esc(a.t)}</b><p>${esc(a.d)}</p></div>`;
+
+function accueil() {
+  const A = alerts(), w = worst(A);
+  const total = S.lots.reduce((a, l) => a + l.effectif, 0);
+  const oeufs = S.lots.reduce((a, l) => a + (l.ponte[TODAY] || 0), 0);
+  let m7 = 0; S.lots.forEach(l => l.deces.forEach(x => { if ((new Date(TODAY) - new Date(x.date)) / 864e5 < 7) m7 += x.n; }));
+  const c = conso7j(), aut = c ? Math.round(S.stockAlimentKg / c) : '–';
+  const msg = w === 'vert' ? 'Tout va bien aujourd’hui' : `${A.length} alerte(s), la plus haute : ${NOM[w].toLowerCase()}`;
+  return `<div class="banner l-${w}">${msg}</div>
+  <div class="grid">
+    <div class="tile"><b>${total}</b><span>animaux</span></div>
+    <div class="tile"><b>${oeufs}</b><span>œufs aujourd’hui</span></div>
+    <div class="tile"><b>${m7}</b><span>morts sur 7 jours</span></div>
+    <div class="tile"><b>${aut}</b><span>jours d’aliment</span></div>
+  </div>
+  <h2>À traiter</h2>${A.length ? A.slice(0, 4).map(alertCard).join('') : '<div class="card muted">Rien à signaler.</div>'}
+  <h2>Actions rapides</h2>
+  <button class="big" onclick="go('saisie','ponte')">🥚 Ramasser les œufs<span>2 touches : lot, nombre</span></button>
+  <button class="big" onclick="go('saisie','mort')">⚠️ Noter un décès<span>Met à jour l’effectif et la densité</span></button>`;
+}
+
+function saisie() {
+  if (!view) return `<h2>Que voulez-vous noter ?</h2>
+    <button class="big" onclick="go('saisie','ponte')">🥚 Ponte du jour<span>Nombre d’œufs par lot</span></button>
+    <button class="big" onclick="go('saisie','aliment')">🌾 Aliment distribué<span>Quantité en kg</span></button>
+    <button class="big" onclick="go('saisie','mort')">⚠️ Décès<span>Nombre et cause</span></button>
+    <button class="big" onclick="go('saisie','vaccin')">💉 Vaccin ou traitement fait<span>Marque la tâche comme faite</span></button>
+    <button class="big" onclick="go('saisie','stock')">📦 Stock d’aliment (kg)<span>Après un achat ou un comptage</span></button>`;
+  const opts = S.lots.map(l => `<option value="${l.id}">${esc(l.nom)} (${l.effectif})</option>`).join('');
+  const back = `<p><a class="link" onclick="go('saisie')">← Retour</a></p>`;
+  if (view === 'ponte') return back + `<h2>Ponte du jour</h2><label>Lot</label><select id="f-lot">${opts}</select><label>Nombre d’œufs</label><input id="f-n" type="number" min="0" inputmode="numeric" autofocus><button class="btn" onclick="saveEntry('ponte')">Enregistrer</button>`;
+  if (view === 'aliment') return back + `<h2>Aliment distribué</h2><label>Lot</label><select id="f-lot">${opts}</select><label>Quantité (kg)</label><input id="f-n" type="number" min="0" step="0.1" inputmode="decimal"><button class="btn" onclick="saveEntry('aliment')">Enregistrer</button>`;
+  if (view === 'mort') return back + `<h2>Décès</h2><label>Lot</label><select id="f-lot">${opts}</select><label>Nombre</label><input id="f-n" type="number" min="1" value="1" inputmode="numeric"><label>Cause</label><select id="f-c"><option>Inconnue</option><option>Maladie</option><option>Prédateur</option><option>Chaleur ou froid</option><option>Accident</option><option>Naturelle</option></select><button class="btn" onclick="saveEntry('mort')">Enregistrer</button>`;
+  if (view === 'stock') return back + `<h2>Stock d’aliment</h2><label>Stock actuel (kg)</label><input id="f-n" type="number" min="0" value="${S.stockAlimentKg}" inputmode="decimal"><button class="btn" onclick="saveEntry('stock')">Enregistrer</button>`;
+  if (view === 'vaccin') {
+    const due = S.lots.flatMap(l => l.sante.filter(s => s.echeance && !s.fait).map(s => ({ l, s })));
+    return back + `<h2>Tâches sanitaires</h2>` + (due.length ? due.map(({ l, s }, i) => `<button class="big" onclick="doSante('${l.id}',${l.sante.indexOf(s)})">✅ ${esc(s.type)} : ${esc(s.txt)}<span>${esc(l.nom)} · prévu ${s.echeance}</span></button>`).join('') : '<div class="card muted">Aucune tâche en attente.</div>');
+  }
+}
+function saveEntry(kind) {
+  const n = parseFloat($('#f-n').value);
+  if (isNaN(n) || n < 0) return toast('Entrez un nombre');
+  if (kind === 'stock') { S.stockAlimentKg = n; }
+  else {
+    const l = lot($('#f-lot').value);
+    if (kind === 'ponte') l.ponte[TODAY] = (l.ponte[TODAY] || 0) + n;
+    if (kind === 'aliment') l.aliment[TODAY] = (l.aliment[TODAY] || 0) + n;
+    if (kind === 'aliment') S.stockAlimentKg = Math.max(0, +(S.stockAlimentKg - n).toFixed(1));
+    if (kind === 'mort') { l.deces.push({ date: TODAY, n, cause: $('#f-c').value }); l.effectif = Math.max(0, l.effectif - n); }
+  }
+  save(); toast('Enregistré ✓'); go('accueil');
+}
+function doSante(id, i) { lot(id).sante[i].fait = TODAY; save(); toast('Fait ✓'); go('accueil'); }
+
+function cheptel() {
+  if (view) return fiche(view);
+  return `<h2>Mes lots</h2>` + S.lots.map(l => `<button class="big" onclick="go('cheptel','${l.id}')">${l.type === 'poule' ? '🐔' : '🐦'} ${esc(l.nom)}<span>${l.effectif} animaux · ${esc(S.logements.find(x => x.id === l.logement).nom)}</span></button>`).join('');
+}
+function fiche(id, shared) {
+  const l = lot(id), age = Math.round((new Date(TODAY) - new Date(l.naissance)) / 864e5);
+  const ev = [...l.sante.map(s => ({ d: s.fait || s.date, t: `${s.type} : ${s.txt}` + (s.fait ? ' (fait)' : '') })),
+    ...l.deces.map(x => ({ d: x.date, t: `Décès : ${x.n} (${x.cause})` }))].sort((a, b) => b.d.localeCompare(a.d));
+  const totalPonte = sum(l.ponte), totalDeces = l.deces.reduce((a, x) => a + x.n, 0);
+  return `${shared ? '<div class="card muted">Vue acheteur : sans prix ni coûts. Le vendeur choisit ce qui est visible.</div>' : '<p><a class="link" onclick="go(\'cheptel\')">← Retour</a></p>'}
+  <div class="card ${shared ? 'shared' : ''}"><h3>${esc(l.nom)}</h3><span class="pill">${l.type === 'poule' ? 'Poule' : 'Caille'}</span> <span class="pill">${age} jours</span> <span class="pill">${l.effectif} animaux</span>
+  <div class="row"><span>Né(s) le</span><b>${l.naissance}</b></div>
+  <div class="row"><span>Œufs enregistrés (3 derniers jours)</span><b>${totalPonte}</b></div>
+  <div class="row"><span>Décès enregistrés</span><b>${totalDeces}</b></div>
+  <div class="row"><span>Mention</span><b>Déclaratif</b></div></div>
+  <h2>Historique sanitaire</h2>${ev.length ? ev.map(e => `<div class="row"><span>${e.d}</span><span>${esc(e.t)}</span></div>`).join('') : '<div class="card muted">Aucun événement.</div>'}
+  ${shared ? `<button class="btn alt" onclick="go('cheptel','${id}')">Fermer l’aperçu</button>` :
+    `<button class="btn" onclick="go('cheptel','share:${id}')">Partager la fiche de suivi</button>`}`;
+}
+function partage(id) {
+  const url = `https://digitalab.example/f/${id}-${Math.random().toString(36).slice(2, 8)}`;
+  return `<p><a class="link" onclick="go('cheptel','${id}')">← Retour</a></p><h2>Partager la fiche</h2>
+  <div class="card"><p class="muted">Lien de démonstration (non actif). Dans le produit : lien ou QR code, rubriques au choix, expiration possible.</p>
+  <input readonly value="${url}" onclick="this.select()"><button class="btn" onclick="navigator.clipboard&&navigator.clipboard.writeText('${url}');toast('Lien copié (démo)')">Copier le lien</button>
+  <button class="btn alt" onclick="go('cheptel','view:${id}')">Voir comme un acheteur</button></div>`;
+}
+function alertes() {
+  const A = alerts();
+  return `<h2>Toutes les alertes</h2>` + (A.length ? A.map(alertCard).join('') : '<div class="card muted">Aucune alerte.</div>') +
+    `<h2>Légende</h2><div class="card muted">${Object.keys(NOM).map(k => `<span class="badge l-${k}">${NOM[k]}</span>`).join('')}<p>Seuils d’exemple, à valider avec un vétérinaire.</p></div>
+    <button class="btn alt" onclick="if(confirm('Remettre les données de démonstration ?')){S=seed();save();go('accueil')}">Réinitialiser la démo</button>`;
+}
+
+function render() {
+  $('#today').textContent = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+  renderNav();
+  let h = '';
+  if (tab === 'accueil') h = accueil();
+  else if (tab === 'saisie') h = saisie();
+  else if (tab === 'cheptel') {
+    if (view && view.startsWith('share:')) h = partage(view.slice(6));
+    else if (view && view.startsWith('view:')) h = fiche(view.slice(5), true);
+    else h = cheptel();
+  } else if (tab === 'alertes') h = alertes();
+  $('#app').innerHTML = h;
+}
+render();
+</script>
+</body>
+</html>
