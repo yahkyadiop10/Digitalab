@@ -112,13 +112,14 @@ export function CarteAlerte({ alerte, noms, priseEnCharge, actions = true }: { a
 }
 
 /* ---------- Navigation ---------- */
-const ONGLETS = [
+const ONGLETS: readonly { cle: string; icone: string; libelle: string; bureau?: boolean }[] = [
   { cle: 'accueil', icone: '🏠', libelle: 'Accueil' },
   { cle: 'saisie', icone: '✍️', libelle: 'Saisie' },
   { cle: 'cheptel', icone: '🐔', libelle: 'Cheptel' },
   { cle: 'couveuse', icone: '🥚', libelle: 'Couveuse' },
   { cle: 'sante', icone: '🩺', libelle: 'Santé' },
-] as const;
+  { cle: 'finances', icone: '💰', libelle: 'Finances', bureau: true },
+];
 
 export function Navigation() {
   const { segments } = useRoute();
@@ -126,7 +127,7 @@ export function Navigation() {
   return (
     <nav aria-label="Navigation principale">
       {ONGLETS.map((o) => (
-        <a key={o.cle} href={`#/${o.cle}`} className={actif === o.cle ? 'actif' : ''} aria-current={actif === o.cle ? 'page' : undefined}>
+        <a key={o.cle} href={`#/${o.cle}`} className={`${actif === o.cle ? 'actif' : ''}${o.bureau ? ' bureau' : ''}`.trim()} aria-current={actif === o.cle ? 'page' : undefined}>
           <b aria-hidden="true">{o.icone}</b>
           {o.libelle}
         </a>
@@ -153,6 +154,7 @@ export function OutilsEntete({ nbAlertes }: { nbAlertes: number }) {
         <span aria-hidden="true">🔔</span>
         {nbAlertes > 0 && <i className="pastille">{nbAlertes}</i>}
       </a>
+      <a href="#/finances" aria-label="Finances" className={`mobile${actif === 'finances' ? ' actif' : ''}`}><span aria-hidden="true">💰</span></a>
       <a href="#/reglages" aria-label="Réglages" className={actif === 'reglages' ? 'actif' : ''}><span aria-hidden="true">⚙️</span></a>
     </div>
   );

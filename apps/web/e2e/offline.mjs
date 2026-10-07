@@ -150,8 +150,28 @@ try {
   assert.doesNotMatch(await acheteur.locator('body').innerText(), /Saisie|Réglages/);
   await acheteur.close();
 
+  // 9. Finances simples : une recette à encaisser, une dépense, le résultat du mois
+  etape(9);
+  await page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
+  await page.getByRole('link', { name: /Recette/ }).click();
+  await page.getByLabel('Montant (FCFA)').fill('45000');
+  await page.getByLabel('Client (facultatif)').fill('M. Diop');
+  await page.getByLabel('Pas encore encaissé').check();
+  await page.getByRole('button', { name: 'Enregistrer' }).click();
+  await page.getByText('Recette notée').waitFor();
+  await page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
+  await page.getByRole('link', { name: /Dépense/ }).click();
+  await page.getByLabel('Montant (FCFA)').fill('12000');
+  await page.getByRole('button', { name: 'Enregistrer' }).click();
+  await page.getByText('Résultat du mois').waitFor();
+  assert.match(await texte(), /Résultat du mois : \+ 33 000 FCFA/);
+  assert.match(await texte(), /On vous doit 45 000 FCFA/);
+  await page.getByRole('button', { name: 'C’est encaissé' }).click();
+  await page.getByRole('button', { name: 'C’est encaissé' }).waitFor({ state: 'detached' });
+  assert.doesNotMatch(await texte(), /On vous doit/);
+
   assert.deepEqual(erreurs, []);
-  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée');
+  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée, finances');
 } catch (e) {
   await page.screenshot({ path: new URL('./echec.png', import.meta.url).pathname }).catch(() => {});
   console.error(await texte().catch(() => ''));

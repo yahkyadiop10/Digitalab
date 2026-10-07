@@ -54,6 +54,12 @@ export async function chargerDemo(): Promise<void> {
     { id: nouvelId(), ...bruit, incubationId: b, etape: 14, jour: j(4), clairs: 1, morts: 2 },
   ]);
   await db.entreesStock.add({ id: nouvelId(), ...bruit, date: j(8), quantiteKg: 120, prixTotal: 54000 });
+  await db.operations.bulkAdd([
+    { id: nouvelId(), ...bruit, date: j(6), sens: 'recette', categorie: 'oeufs', montant: 18000, paye: true, payeLe: j(6), tiers: 'Marché' },
+    { id: nouvelId(), ...bruit, date: j(3), sens: 'recette', categorie: 'poussins', montant: 45000, paye: false, tiers: 'M. Diop', lotId: soie },
+    { id: nouvelId(), ...bruit, date: j(5), sens: 'depense', categorie: 'soins', montant: 6500, paye: true, payeLe: j(5), lotId: soie },
+    { id: nouvelId(), ...bruit, date: j(2), sens: 'depense', categorie: 'materiel', montant: 12000, paye: false, tiers: 'Quincaillerie' },
+  ]);
   await repo.ecrireReglage('nomElevage', 'Ferme de démonstration');
   await repo.ecrireReglage('demarrageFait', true);
 }

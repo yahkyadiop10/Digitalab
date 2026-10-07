@@ -204,3 +204,30 @@ describe('incubation', () => {
     expect(await base.incubations.count()).toBe(1);
   });
 });
+
+describe('finances', () => {
+  it('note une dépense payée et une recette à encaisser, puis la marque encaissée', async () => {
+    const a = await repo.ajouterOperation({ sens: 'depense', categorie: 'materiel', montant: 12000, tiers: ' Quincaillerie ' });
+    expect(await base.operations.get(a.id)).toMatchObject({ sens: 'depense', montant: 12000, paye: true, tiers: 'Quincaillerie' });
+    const b = await repo.ajouterOperation({ sens: 'recette', categorie: 'poussins', montant: 45000, paye: false });
+    expect((await base.operations.get(b.id))?.payeLe).toBeUndefined();
+    await repo.marquerPaye(b.id, true);
+    expect(await base.operations.get(b.id)).toMatchObject({ paye: true, payeLe: expect.any(String) });
+    await repo.annuler(a);
+    expect((await base.operations.get(a.id))?.supprimeLe).toBeTruthy();
+  });
+
+  it('refuse un montant nul, décimal ou une date future', async () => {
+    await expect(repo.ajouterOperation({ sens: 'depense', categorie: 'autre', montant: 0 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.ajouterOperation({ sens: 'depense', categorie: 'autre', montant: 10.5 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 100, date: '2999-01-01' })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('sauvegarde aussi les opérations', async () => {
+    await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 5000 });
+    const json = await repo.exporter();
+    await repo.toutEffacer();
+    await repo.importer(json);
+    expect(await base.operations.count()).toBe(1);
+  });
+});

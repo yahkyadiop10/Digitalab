@@ -1,4 +1,4 @@
-import { effectifs, jourLocal, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { effectifs, jourLocal, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -12,7 +12,7 @@ export const nouvelId = (): string =>
 const maintenant = () => Date.now();
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
-export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante';
+export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations';
 
 /** Référence d'un enregistrement créé, pour pouvoir l'annuler juste après. */
 export interface Annulation {
@@ -304,6 +304,29 @@ export function creerRepo(base: BaseElevage = db) {
 
     async enregistrerProtocoles(protocoles: ProtocoleVaccin[]): Promise<void> {
       await base.reglages.put({ cle: 'protocoles', valeur: protocoles });
+    },
+
+        /* ---------- Finances ---------- */
+
+    async ajouterOperation(d: { sens: SensOperation; categorie: string; montant: number; date?: Jour; lotId?: string | null; tiers?: string; paye?: boolean; note?: string }): Promise<Annulation> {
+      if (!Number.isInteger(d.montant) || d.montant <= 0) throw new ErreurSaisie('Montant : entrez un nombre entier de FCFA supérieur à zéro.');
+      const date = d.date ?? aujourdhui();
+      if (date > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
+      const paye = d.paye ?? true;
+      const id = nouvelId();
+      await base.operations.add({
+        id, misAJour: maintenant(), date, sens: d.sens, categorie: d.categorie, montant: d.montant, paye,
+        ...(paye ? { payeLe: date } : {}),
+        ...(d.lotId ? { lotId: d.lotId } : {}),
+        ...(d.tiers?.trim() ? { tiers: d.tiers.trim() } : {}),
+        ...(d.note?.trim() ? { note: d.note.trim() } : {}),
+      });
+      return { table: 'operations', id };
+    },
+
+    /** Marque une dépense comme payée ou une recette comme encaissée. */
+    async marquerPaye(id: string, paye: boolean): Promise<void> {
+      await base.operations.update(id, { paye, payeLe: paye ? aujourdhui() : undefined, misAJour: maintenant() });
     },
 
     /** Suppression logique : la ligne reste dans la base, l'historique est conservé. */

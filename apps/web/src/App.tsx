@@ -6,6 +6,7 @@ import { Alertes } from './pages/Alertes';
 import { FicheLot, ListeCheptel, NouveauLot } from './pages/Cheptel';
 import { FicheIncubation, NouvelleIncubation, PageAppareil, PageCouveuse } from './pages/Couveuse';
 import { Demarrage } from './pages/Demarrage';
+import { FormOperation, PageFinances } from './pages/Finances';
 import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
 import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
 import { Reglages } from './pages/Reglages';
@@ -37,6 +38,9 @@ function Page({ elevage }: { elevage: Elevage }) {
       if (a === 'calendrier') return <PageCalendrier elevage={elevage} />;
       if (a === 'historique') return <PageHistorique elevage={elevage} />;
       return <PageSante elevage={elevage} />;
+    case 'finances':
+      if (a === 'depense' || a === 'recette') return <FormOperation elevage={elevage} sens={a} lotInitial={params.get('lot')} />;
+      return <PageFinances elevage={elevage} />;
     case 'alertes':
       return <Alertes elevage={elevage} />;
     case 'reglages':

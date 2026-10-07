@@ -7,6 +7,7 @@ import {
   type Alerte,
   type DonneesElevage,
   type Niveau,
+  type OperationFinanciere,
 } from '@digitalab/core';
 import { db, type EtatAlerte } from './db';
 import { fusionnerReglages, type Reglages } from './reglages';
@@ -22,6 +23,8 @@ export interface AlerteEtat {
 
 export interface Elevage {
   donnees: DonneesElevage;
+  /** Dépenses et recettes saisies (hors achats d'aliment du stock). */
+  operations: OperationFinanciere[];
   reglages: Reglages;
   effectifParLot: Map<string, number>;
   alertes: AlerteEtat[];
@@ -70,11 +73,12 @@ export function useElevage(): Elevage | null {
   const incubations = useLiveQuery(() => db.incubations.toArray(), []);
   const mirages = useLiveQuery(() => db.mirages.toArray(), []);
   const evenementsSante = useLiveQuery(() => db.evenementsSante.toArray(), []);
+  const operations = useLiveQuery(() => db.operations.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !reglagesBruts || !etats) return null;
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !operations || !reglagesBruts || !etats) return null;
     const donnees: DonneesElevage = {
       lots: vivants(lots),
       logements: vivants(logements),
@@ -94,6 +98,6 @@ export function useElevage(): Elevage | null {
       logement: (id) => donnees.logements.find((l) => l.id === id)?.nom ?? 'Local',
       incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
     };
-    return { donnees, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, reglagesBruts, etats, maintenant]);
+    return { donnees, operations: vivants(operations), reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, reglagesBruts, etats, maintenant]);
 }
