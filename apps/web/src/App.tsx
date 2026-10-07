@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { Navigation, FournisseurNotif } from './components/ui';
+import { db } from './db';
 import { Accueil } from './pages/Accueil';
 import { Alertes } from './pages/Alertes';
 import { FicheLot, ListeCheptel, NouveauLot } from './pages/Cheptel';
@@ -29,6 +31,18 @@ function Page({ elevage }: { elevage: Elevage }) {
 
 export function App() {
   const elevage = useElevage();
+  const [stockageBloque, setStockageBloque] = useState(false);
+  useEffect(() => {
+    db.open().catch(() => setStockageBloque(true));
+  }, []);
+  if (stockageBloque) {
+    return (
+      <main className="demarrage">
+        <h1>Stockage indisponible</h1>
+        <p>Ce navigateur empêche l’application d’enregistrer vos données sur l’appareil. Ouvrez-la dans une fenêtre normale (pas en navigation privée), ou autorisez le stockage du site dans les réglages du navigateur.</p>
+      </main>
+    );
+  }
   if (!elevage) return <p className="chargement">Chargement…</p>;
   if (!elevage.reglages.demarrageFait && elevage.donnees.lots.length === 0) {
     return <FournisseurNotif><Demarrage /></FournisseurNotif>;

@@ -38,6 +38,14 @@ npm run build
 npm run preview -- --host
 ```
 
+## Aperçu en une page
+
+```sh
+npm run apercu     # fabrique apps/web/dist-apercu/apercu.html, toute l'application dans un seul fichier
+```
+
+Cette version n'a pas de service worker (donc pas de mode hors ligne) : elle sert à montrer l'application dans un visualiseur.
+
 ## Vérifications
 
 ```sh

@@ -1,12 +1,17 @@
+import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig({
+// Mode « apercu » : une seule page HTML autonome, sans service worker, pour la montrer dans un visualiseur (voir scripts/inline.mjs).
+export default defineConfig(({ mode }) => {
+  const apercu = mode === 'apercu';
+  return {
   base: './',
+  resolve: apercu ? { alias: { 'virtual:pwa-register': fileURLToPath(new URL('./src/pwa-stub.ts', import.meta.url)) } } : {},
   plugins: [
     react(),
-    VitePWA({
+    ...(apercu ? [] : [VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
       manifest: {
@@ -26,7 +31,8 @@ export default defineConfig({
         ],
       },
       workbox: { globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'] },
-    }),
+    })]),
   ],
   test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  };
 });
