@@ -27,6 +27,9 @@ function elevage(partiel: Partial<EntreeAlertes> = {}): EntreeAlertes {
     pontes: [],
     distributions: [],
     entreesStock: [],
+    couveuses: [],
+    incubations: [],
+    mirages: [],
     ...partiel,
   };
 }

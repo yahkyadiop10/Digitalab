@@ -14,6 +14,7 @@ export const TYPES_LOGEMENT = { batiment: 'Bâtiment', cage: 'Cage', voliere: 'V
 export interface Noms {
   lot: (id?: string) => string;
   logement: (id?: string) => string;
+  incubation: (id?: string) => string;
 }
 
 export interface MessageAlerte {
@@ -54,6 +55,17 @@ export function messageAlerte(a: Alerte, noms: Noms): MessageAlerte {
         detail: `${p.valeur} œufs contre ${nombre(p.moyenne ?? 0)} en moyenne ces derniers jours (${p.pct} %).`,
         conseil: 'Vérifiez l’eau, l’aliment, la chaleur et les dérangements (prédateurs, bruit).',
       };
+    case 'incubation': {
+      const nom = noms.incubation(a.incubationId);
+      const retard = p.retard ?? 0;
+      const jourJ = p.jourJ ?? 0;
+      const quand = retard > 0 ? `Prévu il y a ${retard} ${pluriel(retard, 'jour', 'jours')}.` : `Jour ${jourJ} d’incubation.`;
+      if (a.etape === 'mirage')
+        return { titre: `${retard > 0 ? 'Mirage en retard' : 'Mirage à faire'} : ${nom}`, detail: quand, conseil: 'Contrôlez les œufs à la lumière et retirez les œufs clairs ou morts, puis notez-les.' };
+      if (a.etape === 'transfert')
+        return { titre: `${retard > 0 ? 'Transfert en retard' : 'Transfert à faire'} : ${nom}`, detail: quand, conseil: 'Arrêtez de tourner les œufs et passez en mode éclosion (humidité plus élevée), selon la notice de votre appareil.' };
+      return { titre: `${retard > 0 ? 'Éclosion en retard' : 'Éclosion attendue'} : ${nom}`, detail: retard > 0 ? quand : 'Les poussins devraient éclore aujourd’hui.', conseil: 'Notez le résultat dès que les éclosions sont terminées.' };
+    }
     case 'stock_aliment':
       return a.niveau === 'rouge'
         ? { titre: 'Stock d’aliment épuisé', detail: 'Le stock enregistré est à zéro.', conseil: 'Achetez de l’aliment, puis enregistrez l’achat.' }
@@ -62,6 +74,6 @@ export function messageAlerte(a: Alerte, noms: Noms): MessageAlerte {
 }
 
 export const fr = {
-  nav: { accueil: 'Accueil', saisie: 'Saisie', cheptel: 'Cheptel', alertes: 'Alertes', reglages: 'Réglages' },
+  nav: { accueil: 'Accueil', saisie: 'Saisie', cheptel: 'Cheptel', couveuse: 'Couveuse', alertes: 'Alertes', reglages: 'Réglages' },
   jour: (d: Date) => d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }),
 };

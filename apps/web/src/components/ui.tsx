@@ -116,6 +116,7 @@ const ONGLETS = [
   { cle: 'accueil', icone: '🏠', libelle: 'Accueil' },
   { cle: 'saisie', icone: '✍️', libelle: 'Saisie' },
   { cle: 'cheptel', icone: '🐔', libelle: 'Cheptel' },
+  { cle: 'couveuse', icone: '🥚', libelle: 'Couveuse' },
   { cle: 'alertes', icone: '🔔', libelle: 'Alertes' },
   { cle: 'reglages', icone: '⚙️', libelle: 'Réglages' },
 ] as const;

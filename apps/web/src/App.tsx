@@ -4,6 +4,7 @@ import { db } from './db';
 import { Accueil } from './pages/Accueil';
 import { Alertes } from './pages/Alertes';
 import { FicheLot, ListeCheptel, NouveauLot } from './pages/Cheptel';
+import { FicheIncubation, NouvelleIncubation, PageAppareil, PageCouveuse } from './pages/Couveuse';
 import { Demarrage } from './pages/Demarrage';
 import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
@@ -20,6 +21,10 @@ function Page({ elevage }: { elevage: Elevage }) {
     case 'cheptel':
       if (a === 'nouveau') return <NouveauLot elevage={elevage} />;
       return a ? <FicheLot elevage={elevage} lotId={a} /> : <ListeCheptel elevage={elevage} />;
+    case 'couveuse':
+      if (a === 'nouvelle') return <NouvelleIncubation elevage={elevage} />;
+      if (a === 'appareil') return <PageAppareil elevage={elevage} id={segments[2]} />;
+      return a ? <FicheIncubation elevage={elevage} id={a} /> : <PageCouveuse elevage={elevage} />;
     case 'alertes':
       return <Alertes elevage={elevage} />;
     case 'reglages':

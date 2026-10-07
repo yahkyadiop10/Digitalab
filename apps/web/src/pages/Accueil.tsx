@@ -1,4 +1,4 @@
-import { ajouterJours, consommationMoyenneKg, jourLocal, stockAlimentKg } from '@digitalab/core';
+import { ajouterJours, consommationMoyenneKg, jourLocal, stockAlimentKg, tachesIncubation } from '@digitalab/core';
 import { Badge, CarteAlerte } from '../components/ui';
 import { NIVEAUX, fr } from '../i18n/fr';
 import type { Elevage } from '../useElevage';
@@ -21,6 +21,12 @@ export function Accueil({ elevage }: { elevage: Elevage }) {
     if (!donnees.distributions.some((d) => d.lotId === l.id && d.date === auj)) t.push({ libelle: `Noter l’aliment : ${l.nom}`, lien: `saisie/aliment?lot=${l.id}` });
     return t;
   });
+
+  for (const t of tachesIncubation(donnees.incubations, donnees.couveuses, donnees.mirages, reglages.especes, auj)) {
+    const nom = t.incubation.nom;
+    if (t.genre === 'tourner') taches.unshift({ libelle: `Tourner les œufs : ${nom}`, lien: `couveuse/${t.incubation.id}` });
+    else taches.unshift({ libelle: `${{ mirage: 'Mirage', transfert: 'Transfert', eclosion: 'Éclosion' }[t.etape.type]} J${t.etape.jourJ} : ${nom}`, lien: `couveuse/${t.incubation.id}` });
+  }
 
   const aTraiter = alertes.filter((a) => !a.priseEnCharge);
   const message = niveauGlobal === 'vert' ? NIVEAUX.vert : `${aTraiter.length} ${aTraiter.length > 1 ? 'alertes' : 'alerte'} · ${NIVEAUX[niveauGlobal].toLowerCase()}`;
@@ -53,7 +59,7 @@ export function Accueil({ elevage }: { elevage: Elevage }) {
         <div className="carte muet">{lotsActifs.length === 0 ? 'Créez votre premier lot pour commencer.' : 'Tout est noté pour aujourd’hui.'}</div>
       ) : (
         taches.slice(0, 6).map((t) => (
-          <a key={t.lien} className="gros" href={`#/${t.lien}`}>{t.libelle}<span>Toucher pour saisir</span></a>
+          <a key={`${t.lien}|${t.libelle}`} className="gros" href={`#/${t.lien}`}>{t.libelle}<span>Toucher pour saisir</span></a>
         ))
       )}
       {lotsActifs.length === 0 && <a className="gros" href="#/cheptel/nouveau">🐔 Créer un lot<span>Nom, espèce, nombre d’animaux</span></a>}

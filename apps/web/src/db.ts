@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Distribution, EntreeStock, Logement, Lot, Mouvement, Ponte } from '@digitalab/core';
+import type { Couveuse, Distribution, EntreeStock, Incubation, Logement, Lot, Mirage, Mouvement, Ponte } from '@digitalab/core';
 
 export interface Reglage {
   cle: string;
@@ -21,6 +21,9 @@ export class BaseElevage extends Dexie {
   pontes!: Table<Ponte, string>;
   distributions!: Table<Distribution, string>;
   entreesStock!: Table<EntreeStock, string>;
+  couveuses!: Table<Couveuse, string>;
+  incubations!: Table<Incubation, string>;
+  mirages!: Table<Mirage, string>;
   reglages!: Table<Reglage, string>;
   etatsAlertes!: Table<EtatAlerte, string>;
 
@@ -36,9 +39,14 @@ export class BaseElevage extends Dexie {
       reglages: 'cle',
       etatsAlertes: 'cle',
     });
+    this.version(2).stores({
+      couveuses: 'id',
+      incubations: 'id, couveuseId',
+      mirages: 'id, incubationId',
+    });
   }
 }
 
 export const db = new BaseElevage();
 
-export const TABLES_DONNEES = ['logements', 'lots', 'mouvements', 'pontes', 'distributions', 'entreesStock', 'reglages', 'etatsAlertes'] as const;
+export const TABLES_DONNEES = ['logements', 'lots', 'mouvements', 'pontes', 'distributions', 'entreesStock', 'couveuses', 'incubations', 'mirages', 'reglages', 'etatsAlertes'] as const;

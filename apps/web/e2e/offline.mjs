@@ -73,8 +73,43 @@ try {
   await page.getByRole('link', { name: /Accueil/ }).click();
   await page.locator('.tuiles').waitFor();
   assert.match(await texte(), /20\s+animaux/);
+
+  // 7. Incubation (toujours hors connexion) : couveuse de 150 œufs, contrôle de la place, éclosion
+  etape(7);
+  const il_y_a = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  await page.getByRole('navigation').getByRole('link', { name: /Couveuse/ }).click();
+  await page.getByLabel('Nom de la couveuse').fill('Ma couveuse');
+  await page.getByLabel('Capacité en œufs de poule').fill('150');
+  await page.getByRole('button', { name: 'Enregistrer' }).click();
+  await page.getByText('Mes couveuses').waitFor();
+  await page.getByRole('link', { name: /Mettre des œufs en incubation/ }).click();
+  await page.getByLabel('Nombre d’œufs').fill('100');
+  await page.getByRole('button', { name: 'Mettre en incubation' }).click();
+  await page.getByRole('heading', { name: 'Calendrier' }).waitFor();
+  assert.match(await texte(), /Mirage J7/);
+  assert.match(await texte(), /Éclosion J21/);
+  await page.getByRole('navigation').getByRole('link', { name: /Couveuse/ }).click();
+  await page.getByText(/50 places libres sur 150/).waitFor();
+  await page.getByRole('link', { name: /Mettre des œufs en incubation/ }).click();
+  await page.getByLabel('Nombre d’œufs').fill('60');
+  await page.getByRole('button', { name: 'Mettre en incubation' }).click();
+  await page.getByText(/Il ne reste que 50 places/).waitFor();
+
+  // Œufs mis il y a 21 jours : l'éclosion peut être notée et crée un lot de poussins
+  await page.getByLabel('Nombre d’œufs').fill('40');
+  await page.getByLabel('Date de mise en place').fill(il_y_a(21));
+  await page.getByLabel('Nom (facultatif)').fill('Lot ancien');
+  await page.getByRole('button', { name: 'Mettre en incubation' }).click();
+  await page.getByRole('heading', { name: 'Calendrier' }).waitFor();
+  await page.getByRole('button', { name: 'Noter l’éclosion' }).or(page.getByText('Noter l’éclosion').first()).first().click();
+  await page.getByLabel('Poussins nés vivants').fill('31');
+  await page.getByRole('button', { name: 'Enregistrer l’éclosion' }).click();
+  await page.getByText(/Issu de l’incubation/).waitFor();
+  assert.match(await texte(), /Lot ancien – poussins/);
+  assert.match(await texte(), /Animaux\s*31/);
+
   assert.deepEqual(erreurs, []);
-  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance');
+  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation');
 } catch (e) {
   await page.screenshot({ path: new URL('./echec.png', import.meta.url).pathname }).catch(() => {});
   console.error(await texte().catch(() => ''));

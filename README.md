@@ -8,7 +8,7 @@ Promesse : un carnet de santé pour chaque animal ou groupe, que le vendeur peut
 
 Phase de cadrage terminée. Phase 1 (« Socle ») : l'application fonctionne déjà seule sur un appareil, sans connexion.
 
-Déjà disponible : lots et effectifs (déduits d'un journal de mouvements), locaux, ponte, aliment et stock, décès, ventes et réformes, annulation de toute saisie, alertes à quatre niveaux (densité, mortalité, chute de ponte, stock d'aliment), seuils réglables, sauvegarde et restauration, installation sur téléphone (PWA).
+Déjà disponible : couveuse (calendrier de mirage, transfert et éclosion, contrôle de la place, lot de poussins créé à l'éclosion, taux de fertilité et d'éclosion), lots et effectifs (déduits d'un journal de mouvements), locaux, ponte, aliment et stock, décès, ventes et réformes, annulation de toute saisie, alertes à quatre niveaux (densité, mortalité, chute de ponte, stock d'aliment, étapes d'incubation), seuils réglables, sauvegarde et restauration, installation sur téléphone (PWA).
 
 À venir dans la phase 1 : comptes et synchronisation entre appareils (aides, vétérinaire), notifications push et e-mail. Les phases suivantes sont décrites dans la feuille de route.
 

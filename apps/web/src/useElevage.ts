@@ -1,41 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  ESPECES_PAR_DEFAUT,
-  SEUILS_PAR_DEFAUT,
   effectifs,
   evaluerAlertes,
   rangNiveau,
   type Alerte,
   type DonneesElevage,
-  type EspeceConfig,
   type Niveau,
-  type Seuils,
 } from '@digitalab/core';
 import { db, type EtatAlerte } from './db';
+import { fusionnerReglages, type Reglages } from './reglages';
 import type { Noms } from './i18n/fr';
 
+export type { Reglages };
 const vivants = <T extends { supprimeLe?: number | null }>(xs: T[] | undefined): T[] => (xs ?? []).filter((x) => !x.supprimeLe);
-
-export interface Reglages {
-  nomElevage: string;
-  demarrageFait: boolean;
-  seuils: Seuils;
-  especes: Record<string, EspeceConfig>;
-}
-
-export function fusionnerReglages(brut: Record<string, unknown>): Reglages {
-  const s = (brut['seuils'] ?? {}) as Partial<Seuils>;
-  const e = (brut['especes'] ?? {}) as Record<string, Partial<EspeceConfig>>;
-  const especes: Record<string, EspeceConfig> = {};
-  for (const [code, d] of Object.entries(ESPECES_PAR_DEFAUT)) especes[code] = { ...d, ...(e[code] ?? {}) };
-  return {
-    nomElevage: typeof brut['nomElevage'] === 'string' ? (brut['nomElevage'] as string) : '',
-    demarrageFait: brut['demarrageFait'] === true,
-    seuils: { ...SEUILS_PAR_DEFAUT, ...s },
-    especes,
-  };
-}
 
 export interface AlerteEtat {
   alerte: Alerte;
@@ -88,11 +66,14 @@ export function useElevage(): Elevage | null {
   const pontes = useLiveQuery(() => db.pontes.toArray(), []);
   const distributions = useLiveQuery(() => db.distributions.toArray(), []);
   const entreesStock = useLiveQuery(() => db.entreesStock.toArray(), []);
+  const couveuses = useLiveQuery(() => db.couveuses.toArray(), []);
+  const incubations = useLiveQuery(() => db.incubations.toArray(), []);
+  const mirages = useLiveQuery(() => db.mirages.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !reglagesBruts || !etats) return null;
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !reglagesBruts || !etats) return null;
     const donnees: DonneesElevage = {
       lots: vivants(lots),
       logements: vivants(logements),
@@ -100,13 +81,17 @@ export function useElevage(): Elevage | null {
       pontes: vivants(pontes),
       distributions: vivants(distributions),
       entreesStock: vivants(entreesStock),
+      couveuses: vivants(couveuses),
+      incubations: vivants(incubations),
+      mirages: vivants(mirages),
     };
     const reglages = fusionnerReglages(Object.fromEntries(reglagesBruts.map((r) => [r.cle, r.valeur])));
     const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils }), etats, maintenant.getTime());
     const noms: Noms = {
       lot: (id) => donnees.lots.find((l) => l.id === id)?.nom ?? 'Lot',
       logement: (id) => donnees.logements.find((l) => l.id === id)?.nom ?? 'Local',
+      incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
     };
     return { donnees, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, reglagesBruts, etats, maintenant]);
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, reglagesBruts, etats, maintenant]);
 }

@@ -1,5 +1,6 @@
 import { ajouterJours, jourLocal } from './dates';
 import { decesEntre, effectifs } from './effectif';
+import { incubationsEnCours, profilDe, suivreEtapes } from './incubation';
 import type {
   Alerte,
   DonneesElevage,
@@ -28,6 +29,7 @@ export function evaluerAlertes(e: EntreeAlertes): Alerte[] {
     ...alertesMortalite(e),
     ...alertesPonte(e),
     ...alertesStockAliment(e),
+    ...alertesIncubation(e),
   ];
   return alertes.sort((a, b) => RANG[b.niveau] - RANG[a.niveau] || a.cle.localeCompare(b.cle));
 }
@@ -145,4 +147,25 @@ function alertesStockAliment(e: EntreeAlertes): Alerte[] {
   const s = e.seuils.autonomieAliment;
   const niveau: Niveau | null = jours < s.orange ? 'orange' : jours < s.jaune ? 'jaune' : null;
   return niveau ? [{ cle: 'stock_aliment', code: 'stock_aliment', niveau, params: { stock, jours: arrondi(jours) } }] : [];
+}
+
+function alertesIncubation(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const out: Alerte[] = [];
+  for (const inc of incubationsEnCours(e.incubations)) {
+    const profil = profilDe(e.especes, inc.especeCode);
+    if (!profil) continue;
+    for (const etape of suivreEtapes(inc, profil, e.mirages, aujourdhui)) {
+      if (etape.statut !== 'aujourdhui' && etape.statut !== 'retard') continue;
+      out.push({
+        cle: `incubation:${inc.id}:${etape.cle}`,
+        code: 'incubation',
+        niveau: etape.statut === 'retard' ? 'orange' : 'jaune',
+        incubationId: inc.id,
+        etape: etape.type,
+        params: { jourJ: etape.jourJ, retard: etape.retard },
+      });
+    }
+  }
+  return out;
 }

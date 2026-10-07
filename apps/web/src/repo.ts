@@ -1,5 +1,6 @@
-import { effectifs, jourLocal, type Jour, type Lot, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { effectifs, jourLocal, oeufsRestants, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
+import { fusionnerReglages } from './reglages';
 
 export class ErreurSaisie extends Error {}
 
@@ -11,7 +12,7 @@ export const nouvelId = (): string =>
 const maintenant = () => Date.now();
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
-export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock';
+export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages';
 
 /** Référence d'un enregistrement créé, pour pouvoir l'annuler juste après. */
 export interface Annulation {
@@ -27,6 +28,15 @@ function entierPositif(n: number, libelle: string): number {
 function decimalPositif(n: number, libelle: string): number {
   if (!Number.isFinite(n) || n <= 0) throw new ErreurSaisie(`${libelle} : entrez un nombre supérieur à zéro.`);
   return n;
+}
+
+function nettoyerCapacites(c: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(c)) {
+    if (v !== undefined && v !== null && (!Number.isInteger(v) || v <= 0)) throw new ErreurSaisie('Capacité : entrez un nombre d’œufs entier supérieur à zéro, ou laissez vide.');
+    if (v > 0) out[k] = v;
+  }
+  return out;
 }
 
 export function creerRepo(base: BaseElevage = db) {
@@ -140,6 +150,119 @@ export function creerRepo(base: BaseElevage = db) {
       const id = nouvelId();
       await base.entreesStock.add({ id, misAJour: maintenant(), date: aujourdhui(), quantiteKg: ecart, prixTotal: null });
       return { table: 'entreesStock', id };
+    },
+
+        /* ---------- Incubation ---------- */
+
+    async creerCouveuse(d: { nom: string; type: TypeCouveuse; capacites: Record<string, number>; eclosoirSepare: boolean }): Promise<string> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom à la couveuse.');
+      const id = nouvelId();
+      await base.couveuses.add({ id, misAJour: maintenant(), nom, type: d.type, capacites: nettoyerCapacites(d.capacites), eclosoirSepare: d.eclosoirSepare });
+      return id;
+    },
+
+    async modifierCouveuse(id: string, d: { nom: string; type: TypeCouveuse; capacites: Record<string, number>; eclosoirSepare: boolean }): Promise<void> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom à la couveuse.');
+      await base.couveuses.update(id, { nom, type: d.type, capacites: nettoyerCapacites(d.capacites), eclosoirSepare: d.eclosoirSepare, misAJour: maintenant() });
+    },
+
+    async supprimerCouveuse(id: string): Promise<void> {
+      const enCours = (await base.incubations.where('couveuseId').equals(id).toArray()).some((i) => !i.supprimeLe && !i.eclosion);
+      if (enCours) throw new ErreurSaisie('Cette couveuse contient des œufs en cours d’incubation.');
+      await base.couveuses.update(id, { supprimeLe: maintenant(), misAJour: maintenant() });
+    },
+
+    /** Place des œufs dans une couveuse, après vérification de la place disponible pendant toute l'incubation. */
+    async mettreEnIncubation(d: { couveuseId: string; especeCode: string; nom: string; nbOeufs: number; miseEnPlace?: Jour; origine?: string }): Promise<string> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom à cette mise en incubation.');
+      const nbOeufs = entierPositif(d.nbOeufs, 'Nombre d’œufs');
+      const miseEnPlace = d.miseEnPlace ?? aujourdhui();
+      if (miseEnPlace > aujourdhui()) throw new ErreurSaisie('La date de mise en place ne peut pas être dans le futur.');
+      const couveuse = await base.couveuses.get(d.couveuseId);
+      if (!couveuse || couveuse.supprimeLe) throw new ErreurSaisie('Choisissez une couveuse.');
+      const reglages = fusionnerReglages(Object.fromEntries((await base.reglages.toArray()).map((r) => [r.cle, r.valeur])));
+      if (!profilDe(reglages.especes, d.especeCode)) throw new ErreurSaisie('Cette espèce n’a pas de repères d’incubation.');
+      const incubations = (await base.incubations.toArray()).filter((i) => !i.supprimeLe);
+      const mirages = (await base.mirages.toArray()).filter((m) => !m.supprimeLe);
+      const libres = placesPourNouvelleMise(couveuse, incubations, mirages, reglages.especes, d.especeCode, miseEnPlace);
+      if (libres !== null && nbOeufs > libres) throw new ErreurSaisie(`Il ne reste que ${libres} places pour ces œufs dans cette couveuse à cette date.`);
+      const id = nouvelId();
+      await base.incubations.add({ id, misAJour: maintenant(), couveuseId: d.couveuseId, especeCode: d.especeCode, nom, miseEnPlace, nbOeufs, faits: [], ...(d.origine?.trim() ? { origine: d.origine.trim() } : {}) });
+      return id;
+    },
+
+    async enregistrerMirage(d: { incubationId: string; etape: number; clairs: number; morts: number }): Promise<Annulation> {
+      const inc = await base.incubations.get(d.incubationId);
+      if (!inc || inc.supprimeLe) throw new ErreurSaisie('Mise en incubation introuvable.');
+      for (const [v, l] of [[d.clairs, 'Œufs clairs'], [d.morts, 'Œufs morts']] as const) {
+        if (!Number.isInteger(v) || v < 0) throw new ErreurSaisie(`${l} : entrez un nombre entier, zéro ou plus.`);
+      }
+      const mirages = (await base.mirages.where('incubationId').equals(inc.id).toArray()).filter((m) => !m.supprimeLe);
+      if (mirages.some((m) => m.etape === d.etape)) throw new ErreurSaisie('Ce mirage est déjà noté. Annulez-le d’abord pour le refaire.');
+      const dispo = oeufsRestants(inc, mirages, aujourdhui());
+      if (d.clairs + d.morts > dispo) throw new ErreurSaisie(`Il ne reste que ${dispo} œufs dans cette mise en incubation.`);
+      const id = nouvelId();
+      await base.mirages.add({ id, misAJour: maintenant(), incubationId: inc.id, etape: d.etape, jour: aujourdhui(), clairs: d.clairs, morts: d.morts });
+      return { table: 'mirages', id };
+    },
+
+    /** Coche ou décoche une étape sans saisie chiffrée (« transfert », « tour:AAAA-MM-JJ »). */
+    async definirFait(incubationId: string, cle: string, fait: boolean): Promise<void> {
+      const inc = await base.incubations.get(incubationId);
+      if (!inc) throw new ErreurSaisie('Mise en incubation introuvable.');
+      const faits = new Set(inc.faits);
+      if (fait) faits.add(cle);
+      else faits.delete(cle);
+      await base.incubations.update(incubationId, { faits: [...faits], misAJour: maintenant() });
+    },
+
+    /** Note l'éclosion et crée le lot de poussins, relié à sa mise en incubation. */
+    async enregistrerEclosion(d: { incubationId: string; nes: number; mortsCoquille?: number; logementId?: string | null }): Promise<string | null> {
+      const inc = await base.incubations.get(d.incubationId);
+      if (!inc || inc.supprimeLe) throw new ErreurSaisie('Mise en incubation introuvable.');
+      if (inc.eclosion) throw new ErreurSaisie('L’éclosion est déjà notée.');
+      if (!Number.isInteger(d.nes) || d.nes < 0) throw new ErreurSaisie('Poussins nés : entrez un nombre entier, zéro ou plus.');
+      const mortsCoquille = d.mortsCoquille ?? 0;
+      if (!Number.isInteger(mortsCoquille) || mortsCoquille < 0) throw new ErreurSaisie('Morts en coquille : entrez un nombre entier, zéro ou plus.');
+      const mirages = (await base.mirages.where('incubationId').equals(inc.id).toArray()).filter((m) => !m.supprimeLe);
+      const dispo = oeufsRestants(inc, mirages, aujourdhui());
+      if (d.nes + mortsCoquille > dispo) throw new ErreurSaisie(`Il ne reste que ${dispo} œufs dans cette mise en incubation.`);
+      let lotId: string | null = null;
+      await base.transaction('rw', base.lots, base.mouvements, base.incubations, async () => {
+        if (d.nes > 0) {
+          lotId = nouvelId();
+          await base.lots.add({ id: lotId, misAJour: maintenant(), nom: `${inc.nom} – poussins`, especeCode: inc.especeCode, naissance: aujourdhui(), logementId: d.logementId ?? null, incubationId: inc.id });
+          await ajouterMouvement(lotId, 'naissance', d.nes, { note: 'Éclosion' });
+        }
+        await base.incubations.update(inc.id, { eclosion: { jour: aujourdhui(), nes: d.nes, mortsCoquille, lotId }, misAJour: maintenant() });
+      });
+      return lotId;
+    },
+
+    /** Annule une éclosion notée par erreur, tant que le lot de poussins n'a pas d'autre historique. */
+    async annulerEclosion(incubationId: string): Promise<void> {
+      const inc = await base.incubations.get(incubationId);
+      if (!inc?.eclosion) throw new ErreurSaisie('Aucune éclosion à annuler.');
+      const lotId = inc.eclosion.lotId;
+      await base.transaction('rw', base.lots, base.mouvements, base.pontes, base.distributions, base.incubations, async () => {
+        if (lotId) {
+          const mouvements = (await base.mouvements.where('lotId').equals(lotId).toArray()).filter((m) => !m.supprimeLe);
+          const autres = mouvements.filter((m) => m.type !== 'naissance').length + (await base.pontes.where('lotId').equals(lotId).filter((p) => !p.supprimeLe).count()) + (await base.distributions.where('lotId').equals(lotId).filter((x) => !x.supprimeLe).count());
+          if (autres > 0) throw new ErreurSaisie('Le lot de poussins a déjà un historique : supprimez-le d’abord.');
+          for (const m of mouvements) await base.mouvements.update(m.id, { supprimeLe: maintenant(), misAJour: maintenant() });
+          await base.lots.update(lotId, { supprimeLe: maintenant(), misAJour: maintenant() });
+        }
+        await base.incubations.update(incubationId, { eclosion: undefined, misAJour: maintenant() });
+      });
+    },
+
+    async supprimerIncubation(id: string): Promise<void> {
+      const inc = await base.incubations.get(id);
+      if (inc?.eclosion) throw new ErreurSaisie('Annulez d’abord l’éclosion.');
+      await base.incubations.update(id, { supprimeLe: maintenant(), misAJour: maintenant() });
     },
 
     /** Suppression logique : la ligne reste dans la base, l'historique est conservé. */

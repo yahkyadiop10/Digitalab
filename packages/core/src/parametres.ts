@@ -5,8 +5,14 @@ import type { EspeceConfig, Seuils } from './types';
  * Elles doivent être validées par un vétérinaire ou un éleveur expérimenté, race par race.
  */
 export const ESPECES_PAR_DEFAUT: Record<string, EspeceConfig> = {
-  poule: { code: 'poule', nom: 'Poule', m2ParAnimal: 0.25, pondeuse: true, incubationJours: 21 },
-  caille: { code: 'caille', nom: 'Caille', m2ParAnimal: 0.015, pondeuse: true, incubationJours: 18 },
+  poule: {
+    code: 'poule', nom: 'Poule', m2ParAnimal: 0.25, pondeuse: true,
+    incubation: { duree: 21, mirages: [7, 14], jourTransfert: 18, temperature: 37.5, humidite: { avant: [45, 55], apres: 65 } },
+  },
+  caille: {
+    code: 'caille', nom: 'Caille', m2ParAnimal: 0.015, pondeuse: true,
+    incubation: { duree: 18, mirages: [7, 14], jourTransfert: 14, temperature: 37.5, humidite: { avant: [45, 55], apres: 65 } },
+  },
   autre: { code: 'autre', nom: 'Autre volaille', m2ParAnimal: 0.25, pondeuse: false },
 };
 

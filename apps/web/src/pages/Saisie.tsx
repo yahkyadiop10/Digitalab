@@ -24,6 +24,7 @@ export function Saisie({ elevage, type, lotInitial }: { elevage: Elevage; type?:
         {MENU.map((m) => (
           <a key={m.type} className="gros" href={`#/saisie/${m.type}`}>{m.icone} {m.titre}<span>{m.aide}</span></a>
         ))}
+        <a className="gros" href="#/couveuse/nouvelle">🥚 Mise en incubation<span>Mettre des œufs dans la couveuse</span></a>
         <a className="gros" href="#/cheptel/nouveau">🐔 Nouveau lot<span>Arrivée ou création d’un groupe d’animaux</span></a>
       </>
     );

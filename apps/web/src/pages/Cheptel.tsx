@@ -150,6 +150,7 @@ export function FicheLot({ elevage, lotId }: { elevage: Elevage; lotId: string }
         {lot.archive && <span className="pilule">Archivé</span>}
         <div className="ligne"><span>Animaux</span><b>{effectif}</b></div>
         <div className="ligne"><span>Local</span><b>{lot.logementId ? noms.logement(lot.logementId) : 'Aucun'}</b></div>
+        {lot.incubationId && <div className="ligne"><span>Issu de l’incubation</span><a className="lien" href={`#/couveuse/${lot.incubationId}`}>{noms.incubation(lot.incubationId)}</a></div>}
       </article>
 
       {!lot.archive && (

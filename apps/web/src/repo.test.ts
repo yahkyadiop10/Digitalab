@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { effectifs, stockAlimentKg } from '@digitalab/core';
 import { BaseElevage } from './db';
 import { ErreurSaisie, creerRepo, type Repo } from './repo';
-import { appliquerEtats, fusionnerReglages } from './useElevage';
+import { fusionnerReglages } from './reglages';
+import { appliquerEtats } from './useElevage';
 
 let n = 0;
 let base: BaseElevage;
@@ -123,5 +124,83 @@ describe('réglages et états d’alerte', () => {
     ];
     expect(appliquerEtats([a('x'), a('y'), a('z')], etats, 1000).map((e) => [e.alerte.cle, e.priseEnCharge])).toEqual([['y', true], ['z', false]]);
     expect(appliquerEtats([a('x')], etats, 3000)).toHaveLength(1);
+  });
+});
+
+describe('incubation', () => {
+  const nouvelleCouveuse = (capacites: Record<string, number> = { poule: 100 }, eclosoirSepare = false) =>
+    repo.creerCouveuse({ nom: 'C', type: 'automatique', capacites, eclosoirSepare });
+
+  it('refuse plus d’œufs que la couveuse n’en accepte, et tient compte des œufs déjà présents', async () => {
+    const c = await nouvelleCouveuse();
+    await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'A', nbOeufs: 70 });
+    await expect(repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'B', nbOeufs: 31 })).rejects.toThrow('30 places');
+    await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'B', nbOeufs: 30 });
+    expect(await base.incubations.count()).toBe(2);
+  });
+
+  it('ne contrôle pas la place quand la capacité est inconnue, mais refuse les dates futures', async () => {
+    const c = await nouvelleCouveuse({});
+    await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'A', nbOeufs: 5000 });
+    await expect(repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'B', nbOeufs: 5, miseEnPlace: '2999-01-01' })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.mettreEnIncubation({ couveuseId: c, especeCode: 'autre', nom: 'C', nbOeufs: 5 })).rejects.toThrow('repères');
+  });
+
+  it('enregistre un mirage, refuse les doublons et les retraits trop grands, puis l’annule', async () => {
+    const c = await nouvelleCouveuse();
+    const i = await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'A', nbOeufs: 20 });
+    await expect(repo.enregistrerMirage({ incubationId: i, etape: 7, clairs: 15, morts: 6 })).rejects.toThrow('20 œufs');
+    const a = await repo.enregistrerMirage({ incubationId: i, etape: 7, clairs: 4, morts: 1 });
+    await expect(repo.enregistrerMirage({ incubationId: i, etape: 7, clairs: 0, morts: 0 })).rejects.toThrow('déjà noté');
+    await repo.annuler(a);
+    await repo.enregistrerMirage({ incubationId: i, etape: 7, clairs: 0, morts: 0 });
+  });
+
+  it('crée le lot de poussins à l’éclosion et sait l’annuler', async () => {
+    const c = await nouvelleCouveuse();
+    const i = await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'caille', nom: 'Cailles', nbOeufs: 30 });
+    await repo.enregistrerMirage({ incubationId: i, etape: 7, clairs: 5, morts: 0 });
+    await expect(repo.enregistrerEclosion({ incubationId: i, nes: 26 })).rejects.toThrow('25 œufs');
+    const lotId = await repo.enregistrerEclosion({ incubationId: i, nes: 22, mortsCoquille: 3 });
+    expect(lotId).toBeTruthy();
+    expect(await effectif(lotId!)).toBe(22);
+    expect(await base.lots.get(lotId!)).toMatchObject({ especeCode: 'caille', incubationId: i });
+    expect((await base.incubations.get(i))?.eclosion).toMatchObject({ nes: 22, mortsCoquille: 3, lotId });
+    await expect(repo.enregistrerEclosion({ incubationId: i, nes: 1 })).rejects.toThrow('déjà notée');
+
+    await repo.annulerEclosion(i);
+    expect((await base.incubations.get(i))?.eclosion).toBeUndefined();
+    expect((await base.lots.get(lotId!))?.supprimeLe).toBeTruthy();
+    expect(await effectif(lotId!)).toBeUndefined();
+  });
+
+  it('refuse d’annuler l’éclosion quand les poussins ont déjà un historique', async () => {
+    const c = await nouvelleCouveuse();
+    const i = await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'A', nbOeufs: 10 });
+    const lotId = (await repo.enregistrerEclosion({ incubationId: i, nes: 8 }))!;
+    await repo.ajouterDeces({ lotId, nombre: 1 });
+    await expect(repo.annulerEclosion(i)).rejects.toThrow('historique');
+  });
+
+  it('coche les étapes sans chiffres et refuse de supprimer une couveuse occupée', async () => {
+    const c = await nouvelleCouveuse();
+    const i = await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'A', nbOeufs: 10 });
+    await repo.definirFait(i, 'transfert', true);
+    expect((await base.incubations.get(i))?.faits).toEqual(['transfert']);
+    await repo.definirFait(i, 'transfert', false);
+    expect((await base.incubations.get(i))?.faits).toEqual([]);
+    await expect(repo.supprimerCouveuse(c)).rejects.toBeInstanceOf(ErreurSaisie);
+    await repo.supprimerIncubation(i);
+    await repo.supprimerCouveuse(c);
+  });
+
+  it('restaure aussi les données d’incubation depuis une sauvegarde', async () => {
+    const c = await nouvelleCouveuse();
+    await repo.mettreEnIncubation({ couveuseId: c, especeCode: 'poule', nom: 'A', nbOeufs: 10 });
+    const json = await repo.exporter();
+    await repo.toutEffacer();
+    await repo.importer(json);
+    expect(await base.couveuses.count()).toBe(1);
+    expect(await base.incubations.count()).toBe(1);
   });
 });

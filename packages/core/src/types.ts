@@ -24,6 +24,8 @@ export interface Lot extends Enregistrement {
   naissance?: Jour;
   logementId?: string | null;
   archive?: boolean;
+  /** Mise en incubation dont ce lot est issu. */
+  incubationId?: string;
 }
 
 export type TypeMouvement = 'naissance' | 'arrivee' | 'vente' | 'deces' | 'reforme' | 'correction';
@@ -61,6 +63,19 @@ export interface EntreeStock extends Enregistrement {
   prixTotal?: number | null;
 }
 
+/** Repères d'incubation d'une espèce. Valeurs de départ : la notice de la couveuse et un technicien font foi. */
+export interface ProfilIncubation {
+  /** Jours entre la mise en place et l'éclosion. */
+  duree: number;
+  /** Jours de mirage (contrôle des œufs à la lumière). */
+  mirages: number[];
+  /** Jour où l'on arrête de tourner les œufs et où l'on passe à l'éclosion. */
+  jourTransfert: number;
+  temperature: number;
+  /** Humidité relative en %, avant le transfert (fourchette) et après. */
+  humidite: { avant: [number, number]; apres: number };
+}
+
 export interface EspeceConfig {
   code: string;
   nom: string;
@@ -68,8 +83,49 @@ export interface EspeceConfig {
   m2ParAnimal: number;
   /** Les œufs sont suivis pour cette espèce. */
   pondeuse: boolean;
-  /** Durée d'incubation (jours), pour la phase 2. */
-  incubationJours?: number;
+  incubation?: ProfilIncubation;
+}
+
+export type TypeCouveuse = 'automatique' | 'manuelle';
+
+export interface Couveuse extends Enregistrement {
+  nom: string;
+  type: TypeCouveuse;
+  /** Nombre d'œufs que l'appareil accepte, par espèce (code espèce → œufs). */
+  capacites: Record<string, number>;
+  /** L'éclosion se fait dans un appareil séparé (sinon dans la même machine). */
+  eclosoirSepare: boolean;
+}
+
+/** Contrôle à la lumière : œufs clairs (non fécondés) et œufs morts retirés. */
+export interface Mirage extends Enregistrement {
+  incubationId: string;
+  /** Jour d'incubation prévu (ex. 7 ou 14). */
+  etape: number;
+  jour: Jour;
+  clairs: number;
+  morts: number;
+}
+
+export interface EclosionResultat {
+  jour: Jour;
+  nes: number;
+  mortsCoquille: number;
+  lotId: string | null;
+}
+
+/** Une mise en incubation : des œufs placés ensemble dans une couveuse le même jour. */
+export interface Incubation extends Enregistrement {
+  couveuseId: string;
+  especeCode: string;
+  nom: string;
+  miseEnPlace: Jour;
+  nbOeufs: number;
+  /** Provenance libre (mère, groupe, achat). */
+  origine?: string;
+  /** Étapes faites sans saisie chiffrée : « transfert », « tour:AAAA-MM-JJ ». */
+  faits: string[];
+  eclosion?: EclosionResultat;
 }
 
 export interface Seuils {
@@ -88,7 +144,7 @@ export interface Seuils {
 }
 
 export type Niveau = 'jaune' | 'orange' | 'rouge';
-export type CodeAlerte = 'densite' | 'mortalite' | 'chute_ponte' | 'stock_aliment';
+export type CodeAlerte = 'densite' | 'mortalite' | 'chute_ponte' | 'stock_aliment' | 'incubation';
 
 export interface Alerte {
   /** Identifiant stable, utilisé pour « pris en charge » et « reporter ». */
@@ -97,6 +153,9 @@ export interface Alerte {
   niveau: Niveau;
   lotId?: string;
   logementId?: string;
+  incubationId?: string;
+  /** Pour une alerte d'incubation : « mirage », « transfert » ou « eclosion ». */
+  etape?: string;
   /** Valeurs chiffrées ; la mise en phrase se fait côté interface (traduisible). */
   params: Record<string, number>;
 }
@@ -108,4 +167,7 @@ export interface DonneesElevage {
   pontes: Ponte[];
   distributions: Distribution[];
   entreesStock: EntreeStock[];
+  couveuses: Couveuse[];
+  incubations: Incubation[];
+  mirages: Mirage[];
 }
