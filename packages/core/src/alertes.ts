@@ -149,21 +149,29 @@ function alertesStockAliment(e: EntreeAlertes): Alerte[] {
   return niveau ? [{ cle: 'stock_aliment', code: 'stock_aliment', niveau, params: { stock, jours: arrondi(jours) } }] : [];
 }
 
+/** Niveau d'une alerte d'incubation : avertissement la veille (jaune), action du jour (orange), retard (orange, rouge pour l'arrêt du retournement et le transfert, qui jouent sur l'éclosion). */
+function niveauIncubation(type: string, statut: 'bientot' | 'aujourdhui' | 'retard'): Niveau {
+  if (statut === 'bientot') return 'jaune';
+  if (statut === 'aujourdhui') return 'orange';
+  return type === 'retournement' || type === 'transfert' ? 'rouge' : 'orange';
+}
+
 function alertesIncubation(e: EntreeAlertes): Alerte[] {
   const aujourdhui = jourLocal(e.maintenant);
   const out: Alerte[] = [];
   for (const inc of incubationsEnCours(e.incubations)) {
     const profil = profilDe(e.especes, inc.especeCode);
     if (!profil) continue;
-    for (const etape of suivreEtapes(inc, profil, e.mirages, aujourdhui)) {
-      if (etape.statut !== 'aujourdhui' && etape.statut !== 'retard') continue;
+    const couveuse = e.couveuses.find((c) => c.id === inc.couveuseId && !c.supprimeLe);
+    for (const etape of suivreEtapes(inc, profil, e.mirages, aujourdhui, couveuse?.eclosoirSepare ?? false)) {
+      if (etape.statut !== 'bientot' && etape.statut !== 'aujourdhui' && etape.statut !== 'retard') continue;
       out.push({
-        cle: `incubation:${inc.id}:${etape.cle}`,
+        cle: `incubation:${inc.id}:${etape.cle}:${etape.statut}`,
         code: 'incubation',
-        niveau: etape.statut === 'retard' ? 'orange' : 'jaune',
+        niveau: niveauIncubation(etape.type, etape.statut),
         incubationId: inc.id,
         etape: etape.type,
-        params: { jourJ: etape.jourJ, retard: etape.retard },
+        params: { jourJ: etape.jourJ, retard: etape.retard, dans: etape.dans, auto: couveuse?.type === 'automatique' ? 1 : 0, separe: couveuse?.eclosoirSepare ? 1 : 0 },
       });
     }
   }

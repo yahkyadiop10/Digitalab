@@ -23,14 +23,17 @@ import type { Elevage } from '../useElevage';
 
 const dateCourte = (j: string) => j.slice(5).split('-').reverse().join('/');
 const nb = (x: number) => String(x).replace('.', ',');
-const LIBELLE_ETAPE = { mirage: 'Mirage', transfert: 'Transfert', eclosion: 'Éclosion' } as const;
+const LIBELLE_ETAPE = { mirage: 'Mirage', retournement: 'Arrêt du retournement', transfert: 'Transfert vers l’éclosoir', eclosion: 'Éclosion' } as const;
 
 function quand(e: EtapeSuivie): string {
   if (e.statut === 'fait') return 'fait';
   if (e.statut === 'aujourdhui') return 'aujourd’hui';
+  if (e.statut === 'bientot') return e.dans === 1 ? 'demain' : `dans ${e.dans} jours`;
   if (e.statut === 'retard') return `en retard de ${e.retard} j`;
   return dateCourte(e.date);
 }
+
+const c0 = (couveuses: Couveuse[], i: Incubation) => couveuses.find((c) => c.id === i.couveuseId);
 
 /* ---------- Liste ---------- */
 
@@ -80,7 +83,7 @@ export function PageCouveuse({ elevage }: { elevage: Elevage }) {
       {enCours.map((i) => {
         const profil = profilDe(reglages.especes, i.especeCode);
         const jourJ = ecartJours(i.miseEnPlace, auj);
-        const etapes = profil ? suivreEtapes(i, profil, donnees.mirages, auj) : [];
+        const etapes = profil ? suivreEtapes(i, profil, donnees.mirages, auj, c0(donnees.couveuses, i)?.eclosoirSepare ?? false) : [];
         const prochaine = etapes.find((e) => e.statut !== 'fait');
         return (
           <a key={i.id} className="gros" href={`#/couveuse/${i.id}`}>
@@ -265,7 +268,7 @@ export function FicheIncubation({ elevage, id }: { elevage: Elevage; id: string 
   const auj = jourLocal(maintenant);
   const profil = profilDe(reglages.especes, inc.especeCode);
   const couveuse = donnees.couveuses.find((c) => c.id === inc.couveuseId);
-  const etapes = profil ? suivreEtapes(inc, profil, donnees.mirages, auj) : [];
+  const etapes = profil ? suivreEtapes(inc, profil, donnees.mirages, auj, couveuse?.eclosoirSepare ?? false) : [];
   const jourJ = ecartJours(inc.miseEnPlace, auj);
   const restants = oeufsRestants(inc, donnees.mirages, auj);
   const stats = statsIncubation(inc, donnees.mirages);
@@ -317,19 +320,20 @@ export function FicheIncubation({ elevage, id }: { elevage: Elevage; id: string 
               <span>
                 {LIBELLE_ETAPE[e.type]} J{e.jourJ} · {dateCourte(e.date)}
               </span>
-              {e.statut === 'fait' ? <span className="badge n-vert">Fait</span> : e.statut === 'retard' ? <span className="badge n-orange">{quand(e)}</span> : e.statut === 'aujourdhui' ? <span className="badge n-jaune">Aujourd’hui</span> : <span className="pilule">à venir</span>}
+              {e.statut === 'fait' ? <span className="badge n-vert">Fait</span> : e.statut === 'retard' ? <span className={`badge n-${e.type === 'retournement' || e.type === 'transfert' ? 'rouge' : 'orange'}`}>{quand(e)}</span> : e.statut === 'aujourdhui' ? <span className="badge n-orange">Aujourd’hui</span> : e.statut === 'bientot' ? <span className="badge n-jaune">{quand(e)}</span> : <span className="pilule">à venir</span>}
             </div>
             {e.statut !== 'fait' && !inc.eclosion && (e.statut === 'aujourdhui' || e.statut === 'retard' || (e.type === 'eclosion' && !!profil && jourJ >= profil.jourTransfert)) && (
               <div className="actions">
                 <button className="lien" onClick={() => setOuvert(ouvert === e.cle ? null : e.cle)}>
-                  {e.type === 'mirage' ? 'Noter le mirage' : e.type === 'transfert' ? 'Transfert fait' : 'Noter l’éclosion'}
+                  {e.type === 'mirage' ? 'Noter le mirage' : e.type === 'retournement' ? 'Retournement arrêté' : e.type === 'transfert' ? 'Transfert fait' : 'Noter l’éclosion'}
                 </button>
               </div>
             )}
             {ouvert === e.cle && e.type === 'mirage' && <FormMirage inc={inc} etape={e.jourJ} fin={() => setOuvert(null)} />}
-            {ouvert === e.cle && e.type === 'transfert' && (
+            {ouvert === e.cle && (e.type === 'retournement' || e.type === 'transfert') && (
               <div className="actions">
-                <button className="bouton court" onClick={() => agir(() => repo.definirFait(inc.id, 'transfert', true), 'Transfert noté ✓', () => setOuvert(null))}>Confirmer le transfert</button>
+                <p className="muet">{e.type === 'retournement' ? `${couveuse?.type === 'automatique' ? 'Coupez le retournement automatique (ou posez les œufs à plat)' : 'Ne tournez plus les œufs'} et passez à l’humidité d’éclosion, selon la notice.` : 'Posez les œufs dans l’éclosoir déjà chauffé, sans les tourner.'}</p>
+                <button className="bouton court" onClick={() => agir(() => repo.definirFait(inc.id, e.cle, true), e.type === 'retournement' ? 'Arrêt du retournement noté ✓' : 'Transfert noté ✓', () => setOuvert(null))}>Confirmer</button>
               </div>
             )}
             {ouvert === e.cle && e.type === 'eclosion' && <FormEclosion elevage={elevage} inc={inc} restants={restants} />}
@@ -339,8 +343,8 @@ export function FicheIncubation({ elevage, id }: { elevage: Elevage; id: string 
                 <div className="ligne muet"><span>{m.clairs} clair(s), {m.morts} mort(s) retiré(s)</span><button className="lien" onClick={() => agir(() => repo.annuler({ table: 'mirages', id: m.id }), 'Mirage annulé')}>Annuler</button></div>
               ) : null;
             })()}
-            {e.statut === 'fait' && e.type === 'transfert' && !inc.eclosion && (
-              <div className="ligne muet"><span>Transfert noté</span><button className="lien" onClick={() => agir(() => repo.definirFait(inc.id, 'transfert', false), 'Transfert annulé')}>Annuler</button></div>
+            {e.statut === 'fait' && (e.type === 'retournement' || e.type === 'transfert') && !inc.eclosion && (
+              <div className="ligne muet"><span>{e.type === 'retournement' ? 'Arrêt du retournement noté' : 'Transfert noté'}</span><button className="lien" onClick={() => agir(async () => { await repo.definirFait(inc.id, e.cle, false); if (e.cle === 'retournement') await repo.definirFait(inc.id, 'transfert', false); }, 'Annulé')}>Annuler</button></div>
             )}
           </div>
         ))}

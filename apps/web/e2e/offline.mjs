@@ -101,7 +101,14 @@ try {
   await page.getByLabel('Nom (facultatif)').fill('Lot ancien');
   await page.getByRole('button', { name: 'Mettre en incubation' }).click();
   await page.getByRole('heading', { name: 'Calendrier' }).waitFor();
-  await page.getByRole('button', { name: 'Noter l’éclosion' }).or(page.getByText('Noter l’éclosion').first()).first().click();
+  // Les alarmes d'une mise en incubation ancienne : arrêt du retournement automatique et mirage en retard
+  await page.getByRole('navigation').getByRole('link', { name: /Alertes/ }).click();
+  await page.getByText(/Arrêt du retournement automatique en retard : Lot ancien/).waitFor();
+  assert.match(await texte(), /Mirage en retard : Lot ancien/);
+  await page.getByRole('navigation').getByRole('link', { name: /Couveuse/ }).click();
+  await page.locator('a.gros', { hasText: 'Lot ancien' }).click();
+  await page.getByRole('heading', { name: 'Calendrier' }).waitFor();
+  await page.getByText('Noter l’éclosion').first().click();
   await page.getByLabel('Poussins nés vivants').fill('31');
   await page.getByRole('button', { name: 'Enregistrer l’éclosion' }).click();
   await page.getByText(/Issu de l’incubation/).waitFor();

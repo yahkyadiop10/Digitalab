@@ -25,7 +25,7 @@ export function Accueil({ elevage }: { elevage: Elevage }) {
   for (const t of tachesIncubation(donnees.incubations, donnees.couveuses, donnees.mirages, reglages.especes, auj)) {
     const nom = t.incubation.nom;
     if (t.genre === 'tourner') taches.unshift({ libelle: `Tourner les œufs : ${nom}`, lien: `couveuse/${t.incubation.id}` });
-    else taches.unshift({ libelle: `${{ mirage: 'Mirage', transfert: 'Transfert', eclosion: 'Éclosion' }[t.etape.type]} J${t.etape.jourJ} : ${nom}`, lien: `couveuse/${t.incubation.id}` });
+    else taches.unshift({ libelle: `${{ mirage: 'Mirage', retournement: 'Arrêt du retournement', transfert: 'Transfert vers l’éclosoir', eclosion: 'Éclosion' }[t.etape.type]} J${t.etape.jourJ} : ${nom}`, lien: `couveuse/${t.incubation.id}` });
   }
 
   const aTraiter = alertes.filter((a) => !a.priseEnCharge);

@@ -3,10 +3,10 @@ import type { Couveuse, EspeceConfig, Incubation, Mirage, ProfilIncubation } fro
 
 const vivants = <T extends { supprimeLe?: number | null }>(xs: T[]) => xs.filter((x) => !x.supprimeLe);
 
-export type TypeEtape = 'mirage' | 'transfert' | 'eclosion';
+export type TypeEtape = 'mirage' | 'retournement' | 'transfert' | 'eclosion';
 
 export interface Etape {
-  /** Identifiant stable : « mirage:7 », « transfert », « eclosion ». */
+  /** Identifiant stable : « mirage:7 », « retournement », « transfert », « eclosion ». */
   cle: string;
   type: TypeEtape;
   /** Jour d'incubation (J7, J14…). */
@@ -14,12 +14,18 @@ export interface Etape {
   date: Jour;
 }
 
-export type StatutEtape = 'fait' | 'aujourdhui' | 'retard' | 'a_venir';
+/** `bientot` : l'étape tombe dans le délai d'avertissement (voir AVERTISSEMENT_JOURS). */
+export type StatutEtape = 'fait' | 'bientot' | 'aujourdhui' | 'retard' | 'a_venir';
+
+/** Nombre de jours d'avance pour prévenir, par type d'étape. */
+export const AVERTISSEMENT_JOURS: Record<TypeEtape, number> = { mirage: 1, retournement: 1, transfert: 1, eclosion: 2 };
 
 export interface EtapeSuivie extends Etape {
   statut: StatutEtape;
   /** Jours de retard (statut « retard »). */
   retard: number;
+  /** Jours restants avant l'étape (statut « bientot »). */
+  dans: number;
 }
 
 export type Tache =
@@ -28,29 +34,38 @@ export type Tache =
 
 export const profilDe = (especes: Record<string, EspeceConfig>, code: string): ProfilIncubation | undefined => especes[code]?.incubation;
 
-/** Étapes d'une mise en incubation, dans l'ordre du temps. */
-export function etapesIncubation(inc: Incubation, profil: ProfilIncubation): Etape[] {
+/**
+ * Étapes d'une mise en incubation, dans l'ordre du temps.
+ * Au jour de transfert, on arrête de tourner les œufs ; avec un éclosoir séparé, on les y transfère aussi.
+ */
+export function etapesIncubation(inc: Incubation, profil: ProfilIncubation, eclosoirSepare: boolean): Etape[] {
+  const date = (j: number) => ajouterJours(inc.miseEnPlace, j);
   const e: Etape[] = profil.mirages
     .filter((j) => j < profil.duree)
-    .map((j) => ({ cle: `mirage:${j}`, type: 'mirage' as const, jourJ: j, date: ajouterJours(inc.miseEnPlace, j) }));
-  e.push({ cle: 'transfert', type: 'transfert', jourJ: profil.jourTransfert, date: ajouterJours(inc.miseEnPlace, profil.jourTransfert) });
-  e.push({ cle: 'eclosion', type: 'eclosion', jourJ: profil.duree, date: ajouterJours(inc.miseEnPlace, profil.duree) });
-  return e.sort((a, b) => a.jourJ - b.jourJ || a.type.localeCompare(b.type));
+    .map((j) => ({ cle: `mirage:${j}`, type: 'mirage' as const, jourJ: j, date: date(j) }));
+  e.push({ cle: 'retournement', type: 'retournement', jourJ: profil.jourTransfert, date: date(profil.jourTransfert) });
+  if (eclosoirSepare) e.push({ cle: 'transfert', type: 'transfert', jourJ: profil.jourTransfert, date: date(profil.jourTransfert) });
+  e.push({ cle: 'eclosion', type: 'eclosion', jourJ: profil.duree, date: date(profil.duree) });
+  const ordre: Record<TypeEtape, number> = { mirage: 0, retournement: 1, transfert: 2, eclosion: 3 };
+  return e.sort((a, b) => a.jourJ - b.jourJ || ordre[a.type] - ordre[b.type]);
 }
 
 function estFait(inc: Incubation, mirages: Mirage[], etape: Etape): boolean {
   if (etape.type === 'eclosion') return !!inc.eclosion;
+  // « transfert » seul était l'ancien nom de l'arrêt du retournement : il reste reconnu.
+  if (etape.type === 'retournement') return inc.faits.includes('retournement') || inc.faits.includes('transfert');
   if (etape.type === 'transfert') return inc.faits.includes('transfert');
   return vivants(mirages).some((m) => m.incubationId === inc.id && m.etape === etape.jourJ);
 }
 
-export function suivreEtapes(inc: Incubation, profil: ProfilIncubation, mirages: Mirage[], aujourdhui: Jour): EtapeSuivie[] {
-  return etapesIncubation(inc, profil).map((e) => {
-    if (estFait(inc, mirages, e)) return { ...e, statut: 'fait', retard: 0 };
+export function suivreEtapes(inc: Incubation, profil: ProfilIncubation, mirages: Mirage[], aujourdhui: Jour, eclosoirSepare: boolean): EtapeSuivie[] {
+  return etapesIncubation(inc, profil, eclosoirSepare).map((e) => {
+    if (estFait(inc, mirages, e)) return { ...e, statut: 'fait', retard: 0, dans: 0 };
     const ecart = ecartJours(e.date, aujourdhui);
-    if (ecart === 0) return { ...e, statut: 'aujourdhui', retard: 0 };
-    if (ecart > 0) return { ...e, statut: 'retard', retard: ecart };
-    return { ...e, statut: 'a_venir', retard: 0 };
+    if (ecart === 0) return { ...e, statut: 'aujourdhui', retard: 0, dans: 0 };
+    if (ecart > 0) return { ...e, statut: 'retard', retard: ecart, dans: 0 };
+    if (-ecart <= AVERTISSEMENT_JOURS[e.type]) return { ...e, statut: 'bientot', retard: 0, dans: -ecart };
+    return { ...e, statut: 'a_venir', retard: 0, dans: -ecart };
   });
 }
 
@@ -69,10 +84,10 @@ export function tachesIncubation(
   for (const inc of incubationsEnCours(incubations)) {
     const profil = profilDe(especes, inc.especeCode);
     if (!profil) continue;
-    for (const etape of suivreEtapes(inc, profil, mirages, aujourdhui)) {
+    const couveuse = vivants(couveuses).find((c) => c.id === inc.couveuseId);
+    for (const etape of suivreEtapes(inc, profil, mirages, aujourdhui, couveuse?.eclosoirSepare ?? false)) {
       if (etape.statut === 'aujourdhui' || etape.statut === 'retard') taches.push({ genre: 'etape', incubation: inc, etape });
     }
-    const couveuse = vivants(couveuses).find((c) => c.id === inc.couveuseId);
     const jourJ = ecartJours(inc.miseEnPlace, aujourdhui);
     if (couveuse?.type === 'manuelle' && jourJ >= 1 && jourJ < profil.jourTransfert && !inc.faits.includes(`tour:${aujourdhui}`)) {
       taches.push({ genre: 'tourner', incubation: inc, jourJ });

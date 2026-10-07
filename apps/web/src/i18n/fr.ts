@@ -58,13 +58,29 @@ export function messageAlerte(a: Alerte, noms: Noms): MessageAlerte {
     case 'incubation': {
       const nom = noms.incubation(a.incubationId);
       const retard = p.retard ?? 0;
+      const dans = p.dans ?? 0;
       const jourJ = p.jourJ ?? 0;
-      const quand = retard > 0 ? `Prévu il y a ${retard} ${pluriel(retard, 'jour', 'jours')}.` : `Jour ${jourJ} d’incubation.`;
+      const auto = p.auto === 1;
+      const separe = p.separe === 1;
+      const quand = (action: string) => (retard > 0 ? `${action} en retard` : dans > 0 ? `${action} ${dans === 1 ? 'demain' : `dans ${dans} jours`}` : `${action} aujourd’hui`);
+      const detail = retard > 0 ? `Prévu il y a ${retard} ${pluriel(retard, 'jour', 'jours')} (jour ${jourJ}).` : dans > 0 ? `Prévu au jour ${jourJ} d’incubation.` : `Jour ${jourJ} d’incubation.`;
       if (a.etape === 'mirage')
-        return { titre: `${retard > 0 ? 'Mirage en retard' : 'Mirage à faire'} : ${nom}`, detail: quand, conseil: 'Contrôlez les œufs à la lumière et retirez les œufs clairs ou morts, puis notez-les.' };
+        return { titre: `${quand('Mirage')} : ${nom}`, detail, conseil: dans > 0 ? 'Préparez la lampe de mirage.' : 'Contrôlez les œufs à la lumière, retirez les œufs clairs ou morts, puis notez-les.' };
+      if (a.etape === 'retournement')
+        return {
+          titre: `${quand(auto ? 'Arrêt du retournement automatique' : 'Arrêt du retournement')} : ${nom}`,
+          detail,
+          conseil: dans > 0
+            ? 'Prévoyez de couper le retournement et d’augmenter l’humidité, selon la notice de votre appareil.'
+            : `${auto ? 'Coupez le retournement automatique (ou posez les œufs à plat)' : 'Ne tournez plus les œufs'} et passez à l’humidité d’éclosion${separe ? ', puis transférez-les dans l’éclosoir' : ''}, selon la notice.`,
+        };
       if (a.etape === 'transfert')
-        return { titre: `${retard > 0 ? 'Transfert en retard' : 'Transfert à faire'} : ${nom}`, detail: quand, conseil: 'Arrêtez de tourner les œufs et passez en mode éclosion (humidité plus élevée), selon la notice de votre appareil.' };
-      return { titre: `${retard > 0 ? 'Éclosion en retard' : 'Éclosion attendue'} : ${nom}`, detail: retard > 0 ? quand : 'Les poussins devraient éclore aujourd’hui.', conseil: 'Notez le résultat dès que les éclosions sont terminées.' };
+        return { titre: `${quand('Transfert vers l’éclosoir')} : ${nom}`, detail, conseil: dans > 0 ? 'Préparez l’éclosoir : propre, chauffé, à la bonne humidité.' : 'Posez les œufs dans l’éclosoir déjà chauffé, sans les tourner.' };
+      return {
+        titre: `${retard > 0 ? 'Éclosion en retard' : dans > 0 ? `Éclosion ${dans === 1 ? 'demain' : `dans ${dans} jours`}` : 'Éclosion attendue aujourd’hui'} : ${nom}`,
+        detail: retard > 0 ? detail : dans > 0 ? `Prévue au jour ${jourJ} d’incubation.` : 'Les poussins devraient éclore aujourd’hui.',
+        conseil: dans > 0 ? 'Préparez l’éleveuse : chaleur, eau et aliment de démarrage prêts.' : 'Évitez d’ouvrir la couveuse pendant l’éclosion, puis notez le résultat.',
+      };
     }
     case 'stock_aliment':
       return a.niveau === 'rouge'

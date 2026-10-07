@@ -35,11 +35,11 @@ export async function chargerDemo(): Promise<void> {
   const a = nouvelId();
   const b = nouvelId();
   await db.incubations.bulkAdd([
-    { id: a, ...bruit, couveuseId: couveuse, especeCode: 'poule', nom: 'Soie blanche – série 1', miseEnPlace: j(9), nbOeufs: 60, origine: 'Mes Soie blanche', faits: [] },
+    { id: a, ...bruit, couveuseId: couveuse, especeCode: 'poule', nom: 'Soie blanche – série 1', miseEnPlace: j(13), nbOeufs: 60, origine: 'Mes Soie blanche', faits: [] },
     { id: b, ...bruit, couveuseId: couveuse, especeCode: 'poule', nom: 'Brahma – série 1', miseEnPlace: j(18), nbOeufs: 50, origine: 'Mes Brahma', faits: [] },
   ]);
   await db.mirages.bulkAdd([
-    { id: nouvelId(), ...bruit, incubationId: a, etape: 7, jour: j(2), clairs: 8, morts: 1 },
+    { id: nouvelId(), ...bruit, incubationId: a, etape: 7, jour: j(6), clairs: 8, morts: 1 },
     { id: nouvelId(), ...bruit, incubationId: b, etape: 7, jour: j(11), clairs: 6, morts: 1 },
     { id: nouvelId(), ...bruit, incubationId: b, etape: 14, jour: j(4), clairs: 1, morts: 2 },
   ]);
