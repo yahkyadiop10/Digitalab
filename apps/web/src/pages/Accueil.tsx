@@ -1,4 +1,4 @@
-import { ajouterJours, consommationMoyenneKg, jourLocal, stockAlimentKg, tachesIncubation } from '@digitalab/core';
+import { ajouterJours, consommationMoyenneKg, jourLocal, stockAlimentKg, tachesIncubation, vaccinsAFaire } from '@digitalab/core';
 import { Badge, CarteAlerte } from '../components/ui';
 import { NIVEAUX, fr } from '../i18n/fr';
 import type { Elevage } from '../useElevage';
@@ -26,6 +26,10 @@ export function Accueil({ elevage }: { elevage: Elevage }) {
     const nom = t.incubation.nom;
     if (t.genre === 'tourner') taches.unshift({ libelle: `Tourner les œufs : ${nom}`, lien: `couveuse/${t.incubation.id}` });
     else taches.unshift({ libelle: `${{ mirage: 'Mirage', retournement: 'Arrêt du retournement', transfert: 'Transfert vers l’éclosoir', eclosion: 'Éclosion' }[t.etape.type]} J${t.etape.jourJ} : ${nom}`, lien: `couveuse/${t.incubation.id}` });
+  }
+
+  for (const v of vaccinsAFaire(donnees.lots, donnees.mouvements, donnees.evenementsSante, reglages.protocoles, auj)) {
+    if (v.statut === 'aujourdhui' || v.statut === 'retard') taches.unshift({ libelle: `Vaccin : ${v.protocole.nom} – ${v.lot.nom}`, lien: `sante/vaccin?lot=${v.lot.id}&protocole=${v.protocole.id}` });
   }
 
   const aTraiter = alertes.filter((a) => !a.priseEnCharge);

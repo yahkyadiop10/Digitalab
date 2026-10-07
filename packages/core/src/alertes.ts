@@ -1,11 +1,13 @@
-import { ajouterJours, jourLocal } from './dates';
+import { ajouterJours, ecartJours, jourLocal } from './dates';
 import { decesEntre, effectifs } from './effectif';
 import { incubationsEnCours, profilDe, suivreEtapes } from './incubation';
+import { delaisEnCours, vaccinsAFaire } from './sante';
 import type {
   Alerte,
   DonneesElevage,
   EspeceConfig,
   Niveau,
+  ProtocoleVaccin,
   Ponte,
   Seuils,
 } from './types';
@@ -14,6 +16,7 @@ export interface EntreeAlertes extends DonneesElevage {
   maintenant: Date;
   especes: Record<string, EspeceConfig>;
   seuils: Seuils;
+  protocoles: ProtocoleVaccin[];
 }
 
 const RANG: Record<Niveau, number> = { jaune: 1, orange: 2, rouge: 3 };
@@ -30,6 +33,7 @@ export function evaluerAlertes(e: EntreeAlertes): Alerte[] {
     ...alertesPonte(e),
     ...alertesStockAliment(e),
     ...alertesIncubation(e),
+    ...alertesSante(e),
   ];
   return alertes.sort((a, b) => RANG[b.niveau] - RANG[a.niveau] || a.cle.localeCompare(b.cle));
 }
@@ -174,6 +178,45 @@ function alertesIncubation(e: EntreeAlertes): Alerte[] {
         params: { jourJ: etape.jourJ, retard: etape.retard, dans: etape.dans, auto: couveuse?.type === 'automatique' ? 1 : 0, separe: couveuse?.eclosoirSepare ? 1 : 0 },
       });
     }
+  }
+  return out;
+}
+
+function alertesSante(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const out: Alerte[] = [];
+
+  for (const v of vaccinsAFaire(e.lots, e.mouvements, e.evenementsSante, e.protocoles, aujourdhui)) {
+    if (v.statut === 'a_renseigner') continue;
+    const niveau: Niveau = v.statut === 'bientot' ? 'jaune' : v.statut === 'aujourdhui' ? 'orange' : v.retard > 7 ? 'rouge' : 'orange';
+    out.push({ cle: `vaccin:${v.lot.id}:${v.protocole.id}:${v.statut}`, code: 'vaccin', niveau, lotId: v.lot.id, libelle: v.protocole.nom, params: { retard: v.retard, dans: v.dans } });
+  }
+
+  for (const d of delaisEnCours(e.evenementsSante, aujourdhui)) {
+    out.push({
+      cle: `delai:${d.evenement.id}`, code: 'delai_attente', niveau: 'jaune', lotId: d.evenement.lotId,
+      libelle: d.evenement.nom ?? 'traitement',
+      params: { jours: ecartJours(aujourdhui, d.jusqua) + 1, enCours: d.enCours ? 1 : 0 },
+    });
+  }
+
+  const recents = e.evenementsSante.filter((x) => !x.supprimeLe && x.type === 'observation' && x.date >= ajouterJours(aujourdhui, -2) && x.date <= aujourdhui);
+  for (const o of recents) {
+    if (o.gravite === 3 || o.gravite === 2) {
+      out.push({ cle: `grave:${o.id}`, code: 'sante_grave', niveau: o.gravite === 3 ? 'rouge' : 'orange', lotId: o.lotId, params: { gravite: o.gravite, symptomes: o.symptomes?.length ?? 0 } });
+    }
+  }
+
+  // Plusieurs lots du même local avec des symptômes inquiétants : possible foyer.
+  const parLocal = new Map<string, Set<string>>();
+  for (const o of recents) {
+    if ((o.gravite ?? 1) < 2) continue;
+    const lot = e.lots.find((l) => l.id === o.lotId);
+    if (!lot?.logementId) continue;
+    parLocal.set(lot.logementId, (parLocal.get(lot.logementId) ?? new Set()).add(lot.id));
+  }
+  for (const [logementId, lotsTouches] of parLocal) {
+    if (lotsTouches.size >= 2) out.push({ cle: `foyer:${logementId}:${aujourdhui}`, code: 'foyer', niveau: 'rouge', logementId, params: { lots: lotsTouches.size } });
   }
   return out;
 }

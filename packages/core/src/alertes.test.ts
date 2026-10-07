@@ -30,6 +30,8 @@ function elevage(partiel: Partial<EntreeAlertes> = {}): EntreeAlertes {
     couveuses: [],
     incubations: [],
     mirages: [],
+    evenementsSante: [],
+    protocoles: [],
     ...partiel,
   };
 }

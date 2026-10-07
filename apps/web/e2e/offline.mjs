@@ -102,7 +102,7 @@ try {
   await page.getByRole('button', { name: 'Mettre en incubation' }).click();
   await page.getByRole('heading', { name: 'Calendrier' }).waitFor();
   // Les alarmes d'une mise en incubation ancienne : arrêt du retournement automatique et mirage en retard
-  await page.getByRole('navigation').getByRole('link', { name: /Alertes/ }).click();
+  await page.getByRole('link', { name: /^Alertes/ }).click();
   await page.getByText(/Arrêt du retournement automatique en retard : Lot ancien/).waitFor();
   assert.match(await texte(), /Mirage en retard : Lot ancien/);
   await page.getByRole('navigation').getByRole('link', { name: /Couveuse/ }).click();
@@ -115,8 +115,43 @@ try {
   assert.match(await texte(), /Lot ancien – poussins/);
   assert.match(await texte(), /Animaux\s*31/);
 
+  // 8. Santé : symptômes graves, pistes, traitement avec délai d'attente, fiche de suivi partagée
+  etape(8);
+  await page.getByRole('navigation').getByRole('link', { name: /Santé/ }).click();
+  await page.getByRole('link', { name: /Noter un problème de santé/ }).click();
+  await page.getByLabel('Lot concerné').selectOption({ label: 'Mes poules' });
+  await page.getByLabel('Diarrhée avec du sang').check();
+  await page.getByLabel('Abattu, immobile').check();
+  await page.getByRole('button', { name: 'Grave' }).click();
+  await page.getByText('Coccidiose').first().waitFor();
+  assert.match(await texte(), /pas un diagnostic/);
+  await page.getByLabel('Je soupçonne cette maladie').first().check();
+  await page.getByRole('button', { name: 'Enregistrer' }).click();
+  await page.getByRole('heading', { name: 'Traitement ou remède' }).waitFor();
+  await page.getByLabel('Produit ou remède').fill('Tisane');
+  await page.getByLabel('Délai d’attente après le traitement (jours)').fill('3');
+  await page.getByRole('button', { name: 'Enregistrer' }).click();
+  await page.getByText('Œufs et viande à ne pas consommer').first().waitFor();
+  await page.getByRole('link', { name: /^Alertes/ }).click();
+  await page.getByText(/Symptômes graves : Mes poules/).waitFor();
+
+  await page.getByRole('navigation').getByRole('link', { name: /Cheptel/ }).click();
+  await page.getByRole('link', { name: /Mes poules/ }).click();
+  await page.getByRole('link', { name: 'Partager la fiche de suivi' }).click();
+  await page.getByText('Traitement : Tisane').first().waitFor();
+  assert.match(await texte(), /non vérifiées/);
+  const lien = await page.getByLabel('Lien de la fiche').inputValue();
+  assert.match(lien, /#\/fiche\/[A-Za-z0-9_-]+$/);
+  const acheteur = await contexte.newPage();
+  await acheteur.goto(lien);
+  await acheteur.getByText('Fiche de suivi d’un élevage').waitFor();
+  await acheteur.getByText('Traitement : Tisane').waitFor();
+  assert.equal(await acheteur.getByRole('navigation').count(), 0);
+  assert.doesNotMatch(await acheteur.locator('body').innerText(), /Saisie|Réglages/);
+  await acheteur.close();
+
   assert.deepEqual(erreurs, []);
-  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation');
+  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée');
 } catch (e) {
   await page.screenshot({ path: new URL('./echec.png', import.meta.url).pathname }).catch(() => {});
   console.error(await texte().catch(() => ''));

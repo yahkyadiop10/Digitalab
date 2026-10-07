@@ -69,11 +69,12 @@ export function useElevage(): Elevage | null {
   const couveuses = useLiveQuery(() => db.couveuses.toArray(), []);
   const incubations = useLiveQuery(() => db.incubations.toArray(), []);
   const mirages = useLiveQuery(() => db.mirages.toArray(), []);
+  const evenementsSante = useLiveQuery(() => db.evenementsSante.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !reglagesBruts || !etats) return null;
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !reglagesBruts || !etats) return null;
     const donnees: DonneesElevage = {
       lots: vivants(lots),
       logements: vivants(logements),
@@ -84,14 +85,15 @@ export function useElevage(): Elevage | null {
       couveuses: vivants(couveuses),
       incubations: vivants(incubations),
       mirages: vivants(mirages),
+      evenementsSante: vivants(evenementsSante),
     };
     const reglages = fusionnerReglages(Object.fromEntries(reglagesBruts.map((r) => [r.cle, r.valeur])));
-    const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils }), etats, maintenant.getTime());
+    const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils, protocoles: reglages.protocoles }), etats, maintenant.getTime());
     const noms: Noms = {
       lot: (id) => donnees.lots.find((l) => l.id === id)?.nom ?? 'Lot',
       logement: (id) => donnees.logements.find((l) => l.id === id)?.nom ?? 'Local',
       incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
     };
     return { donnees, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, reglagesBruts, etats, maintenant]);
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, reglagesBruts, etats, maintenant]);
 }

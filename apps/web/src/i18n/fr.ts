@@ -82,6 +82,38 @@ export function messageAlerte(a: Alerte, noms: Noms): MessageAlerte {
         conseil: dans > 0 ? 'Préparez l’éleveuse : chaleur, eau et aliment de démarrage prêts.' : 'Évitez d’ouvrir la couveuse pendant l’éclosion, puis notez le résultat.',
       };
     }
+    case 'vaccin': {
+      const lot = noms.lot(a.lotId);
+      const nom = a.libelle ?? 'Vaccin';
+      const retard = p.retard ?? 0;
+      const dans = p.dans ?? 0;
+      const titre = retard > 0 ? `${nom} en retard : ${lot}` : dans > 0 ? `${nom} ${dans === 1 ? 'demain' : `dans ${dans} jours`} : ${lot}` : `${nom} aujourd’hui : ${lot}`;
+      return {
+        titre,
+        detail: retard > 0 ? `Prévu il y a ${retard} ${pluriel(retard, 'jour', 'jours')}.` : 'Selon votre calendrier de vaccination.',
+        conseil: retard > 0 ? 'Faites le vaccin dès que possible, puis notez-le pour que le rappel soit recalculé.' : 'Préparez le vaccin et notez-le une fois fait.',
+      };
+    }
+    case 'delai_attente': {
+      const jours = p.jours ?? 0;
+      return {
+        titre: `Œufs et viande à ne pas consommer : ${noms.lot(a.lotId)}`,
+        detail: `${p.enCours === 1 ? 'Traitement en cours' : 'Délai d’attente'} (${a.libelle ?? 'traitement'}) : encore ${jours} ${pluriel(jours, 'jour', 'jours')}.`,
+        conseil: 'Ne vendez ni ne consommez les œufs ou la viande de ce lot avant la fin du délai.',
+      };
+    }
+    case 'sante_grave':
+      return {
+        titre: `${p.gravite === 3 ? 'Symptômes graves' : 'Symptômes inquiétants'} : ${noms.lot(a.lotId)}`,
+        detail: `${p.symptomes ?? 0} ${pluriel(p.symptomes ?? 0, 'symptôme noté', 'symptômes notés')} récemment.`,
+        conseil: 'Isolez les animaux concernés, appelez un vétérinaire et consultez les pistes dans l’onglet Santé.',
+      };
+    case 'foyer':
+      return {
+        titre: `Possible foyer : ${noms.logement(a.logementId)}`,
+        detail: `${p.lots} lots du même local présentent des symptômes inquiétants.`,
+        conseil: 'Limitez les déplacements entre lots, désinfectez le matériel et prévenez un vétérinaire.',
+      };
     case 'stock_aliment':
       return a.niveau === 'rouge'
         ? { titre: 'Stock d’aliment épuisé', detail: 'Le stock enregistré est à zéro.', conseil: 'Achetez de l’aliment, puis enregistrez l’achat.' }
@@ -90,6 +122,6 @@ export function messageAlerte(a: Alerte, noms: Noms): MessageAlerte {
 }
 
 export const fr = {
-  nav: { accueil: 'Accueil', saisie: 'Saisie', cheptel: 'Cheptel', couveuse: 'Couveuse', alertes: 'Alertes', reglages: 'Réglages' },
+  nav: { accueil: 'Accueil', saisie: 'Saisie', cheptel: 'Cheptel', couveuse: 'Couveuse', sante: 'Santé', alertes: 'Alertes', reglages: 'Réglages' },
   jour: (d: Date) => d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }),
 };

@@ -117,11 +117,10 @@ const ONGLETS = [
   { cle: 'saisie', icone: '✍️', libelle: 'Saisie' },
   { cle: 'cheptel', icone: '🐔', libelle: 'Cheptel' },
   { cle: 'couveuse', icone: '🥚', libelle: 'Couveuse' },
-  { cle: 'alertes', icone: '🔔', libelle: 'Alertes' },
-  { cle: 'reglages', icone: '⚙️', libelle: 'Réglages' },
+  { cle: 'sante', icone: '🩺', libelle: 'Santé' },
 ] as const;
 
-export function Navigation({ nbAlertes }: { nbAlertes: number }) {
+export function Navigation() {
   const { segments } = useRoute();
   const actif = segments[0] ?? 'accueil';
   return (
@@ -130,7 +129,6 @@ export function Navigation({ nbAlertes }: { nbAlertes: number }) {
         <a key={o.cle} href={`#/${o.cle}`} className={actif === o.cle ? 'actif' : ''} aria-current={actif === o.cle ? 'page' : undefined}>
           <b aria-hidden="true">{o.icone}</b>
           {o.libelle}
-          {o.cle === 'alertes' && nbAlertes > 0 && <i className="pastille">{nbAlertes}</i>}
         </a>
       ))}
     </nav>
@@ -142,5 +140,20 @@ export function Retour({ vers, libelle = 'Retour' }: { vers: string; libelle?: s
     <p>
       <a className="lien" href={`#/${vers}`}>← {libelle}</a>
     </p>
+  );
+}
+
+/** Boutons de l'en-tête : alertes (avec compteur) et réglages. */
+export function OutilsEntete({ nbAlertes }: { nbAlertes: number }) {
+  const { segments } = useRoute();
+  const actif = segments[0];
+  return (
+    <div className="outils">
+      <a href="#/alertes" aria-label={nbAlertes > 0 ? `Alertes, ${nbAlertes} à traiter` : 'Alertes'} className={actif === 'alertes' ? 'actif' : ''}>
+        <span aria-hidden="true">🔔</span>
+        {nbAlertes > 0 && <i className="pastille">{nbAlertes}</i>}
+      </a>
+      <a href="#/reglages" aria-label="Réglages" className={actif === 'reglages' ? 'actif' : ''}><span aria-hidden="true">⚙️</span></a>
+    </div>
   );
 }

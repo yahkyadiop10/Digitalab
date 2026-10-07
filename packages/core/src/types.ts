@@ -128,6 +128,47 @@ export interface Incubation extends Enregistrement {
   eclosion?: EclosionResultat;
 }
 
+export type TypeSante = 'observation' | 'vaccin' | 'traitement' | 'quarantaine';
+export type ResultatTraitement = 'gueri' | 'ameliore' | 'sans_effet';
+
+/** Événement de santé d'un lot : jamais supprimé (suppression logique), pour garder l'historique complet. */
+export interface EvenementSante extends Enregistrement {
+  lotId: string;
+  type: TypeSante;
+  date: Jour;
+  /** Observation : codes des symptômes notés. */
+  symptomes?: string[];
+  /** Observation : 1 léger, 2 inquiétant, 3 grave. */
+  gravite?: 1 | 2 | 3;
+  /** Observation : maladie que l'on soupçonne (code), choisie par l'éleveur ou le vétérinaire. */
+  maladie?: string;
+  /** Vaccin : nom du vaccin ; traitement : nom du produit. */
+  nom?: string;
+  dose?: string;
+  voie?: string;
+  /** Vaccin : numéro de lot du flacon, pour la traçabilité. */
+  numeroLotProduit?: string;
+  /** Vaccin fait selon un protocole : identifiant de la ligne de protocole. */
+  protocoleId?: string;
+  /** Traitement ou quarantaine : durée en jours, à partir de `date`. */
+  dureeJours?: number;
+  /** Traitement : jours à attendre après la fin avant de consommer ou vendre œufs et viande. */
+  delaiAttenteJours?: number;
+  resultat?: ResultatTraitement;
+  note?: string;
+}
+
+/** Une ligne de calendrier de vaccination, modifiable par l'éleveur. */
+export interface ProtocoleVaccin {
+  id: string;
+  nom: string;
+  especeCode: string;
+  /** Âge (jours) de la première dose. */
+  ageJours: number;
+  /** Si renseigné, rappel tous les N jours après la dernière dose. */
+  repeterTousLesJours?: number | null;
+}
+
 export interface Seuils {
   densite: { jaune: number; orange: number; rouge: number };
   /** Taux de mortalité en %, sur 1 jour et sur 7 jours. */
@@ -144,7 +185,7 @@ export interface Seuils {
 }
 
 export type Niveau = 'jaune' | 'orange' | 'rouge';
-export type CodeAlerte = 'densite' | 'mortalite' | 'chute_ponte' | 'stock_aliment' | 'incubation';
+export type CodeAlerte = 'densite' | 'mortalite' | 'chute_ponte' | 'stock_aliment' | 'incubation' | 'vaccin' | 'delai_attente' | 'foyer' | 'sante_grave';
 
 export interface Alerte {
   /** Identifiant stable, utilisé pour « pris en charge » et « reporter ». */
@@ -154,8 +195,10 @@ export interface Alerte {
   lotId?: string;
   logementId?: string;
   incubationId?: string;
-  /** Pour une alerte d'incubation : « mirage », « transfert » ou « eclosion ». */
+  /** Pour une alerte d'incubation : « mirage », « retournement », « transfert » ou « eclosion ». */
   etape?: string;
+  /** Pour une alerte de vaccin : nom du vaccin. */
+  libelle?: string;
   /** Valeurs chiffrées ; la mise en phrase se fait côté interface (traduisible). */
   params: Record<string, number>;
 }
@@ -170,4 +213,5 @@ export interface DonneesElevage {
   couveuses: Couveuse[];
   incubations: Incubation[];
   mirages: Mirage[];
+  evenementsSante: EvenementSante[];
 }

@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { ajouterJours, jourLocal, type Lot } from '@digitalab/core';
+import { ajouterJours, delaisEnCours, jourLocal, quarantainesEnCours, type Lot } from '@digitalab/core';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
+import { libelleEvenement } from './Sante';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
 
@@ -94,6 +95,7 @@ function historique(elevage: Elevage, lot: Lot): Evenement[] {
     })),
     ...donnees.pontes.filter((p) => p.lotId === lot.id).map((p) => ({ cle: p.id, date: p.date, annulation: { table: 'pontes', id: p.id } as Annulation, texte: `Ponte : ${p.nombre} œuf(s)${p.casses ? `, dont ${p.casses} cassé(s)` : ''}` })),
     ...donnees.distributions.filter((d) => d.lotId === lot.id).map((d) => ({ cle: d.id, date: d.date, annulation: { table: 'distributions', id: d.id } as Annulation, texte: `Aliment : ${String(d.quantiteKg).replace('.', ',')} kg` })),
+    ...donnees.evenementsSante.filter((e) => e.lotId === lot.id).map((e) => ({ cle: e.id, date: e.date, annulation: { table: 'evenementsSante', id: e.id } as Annulation, texte: libelleEvenement(e) })),
   ];
   return ev.sort((a, b) => b.date.localeCompare(a.date) || b.cle.localeCompare(a.cle));
 }
@@ -193,6 +195,20 @@ export function FicheLot({ elevage, lotId }: { elevage: Elevage; lotId: string }
           </div>
         </>
       )}
+
+      <h2>Santé</h2>
+      {delaisEnCours(donnees.evenementsSante.filter((e) => e.lotId === lot.id), auj).map((d) => (
+        <div key={d.evenement.id} className="carte alerte n-jaune"><h3>Œufs et viande à ne pas consommer</h3><p>{d.evenement.nom} · jusqu’au {d.jusqua.split('-').reverse().join('/')} inclus.</p></div>
+      ))}
+      {quarantainesEnCours(donnees.evenementsSante.filter((e) => e.lotId === lot.id), auj).map((q) => (
+        <div key={q.evenement.id} className="carte alerte n-orange"><h3>En quarantaine</h3><p>Jusqu’au {q.jusqua.split('-').reverse().join('/')} inclus.</p></div>
+      ))}
+      <div className="rangee">
+        <a className="bouton alt court" href={`#/sante/probleme?lot=${lot.id}`}>⚠️ Problème</a>
+        <a className="bouton alt court" href={`#/sante/vaccin?lot=${lot.id}`}>💉 Vaccin</a>
+        <a className="bouton alt court" href={`#/sante/traitement?lot=${lot.id}`}>💊 Traitement</a>
+      </div>
+      <a className="bouton" href={`#/cheptel/${lot.id}/fiche`}>Partager la fiche de suivi</a>
 
       <h2>Historique</h2>
       {evenements.length === 0 ? <div className="carte muet">Rien d’enregistré.</div> : (

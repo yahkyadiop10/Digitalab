@@ -1,4 +1,4 @@
-import { effectifs, jourLocal, oeufsRestants, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { effectifs, jourLocal, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -12,7 +12,7 @@ export const nouvelId = (): string =>
 const maintenant = () => Date.now();
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
-export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages';
+export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante';
 
 /** Référence d'un enregistrement créé, pour pouvoir l'annuler juste après. */
 export interface Annulation {
@@ -43,6 +43,15 @@ export function creerRepo(base: BaseElevage = db) {
   const effectifLot = async (lotId: string): Promise<number> => {
     const m = await base.mouvements.where('lotId').equals(lotId).toArray();
     return effectifs(m).get(lotId) ?? 0;
+  };
+
+  const ajouterSante = async (d: Omit<Partial<EvenementSante>, 'id' | 'misAJour'> & { lotId: string; type: EvenementSante['type'] }): Promise<Annulation> => {
+    const lot = await base.lots.get(d.lotId);
+    if (!lot || lot.supprimeLe) throw new ErreurSaisie('Choisissez un lot.');
+    const id = nouvelId();
+    const propre = Object.fromEntries(Object.entries(d).filter(([, v]) => v !== undefined && v !== '' && !(typeof v === 'string' && v.trim() === '')));
+    await base.evenementsSante.add({ ...(propre as object), id, misAJour: maintenant(), lotId: d.lotId, type: d.type, date: d.date ?? aujourdhui() } as EvenementSante);
+    return { table: 'evenementsSante', id };
   };
 
   const ajouterMouvement = async (lotId: string, type: TypeMouvement, quantite: number, extra: { cause?: string; note?: string; date?: Jour } = {}): Promise<Annulation> => {
@@ -263,6 +272,38 @@ export function creerRepo(base: BaseElevage = db) {
       const inc = await base.incubations.get(id);
       if (inc?.eclosion) throw new ErreurSaisie('Annulez d’abord l’éclosion.');
       await base.incubations.update(id, { supprimeLe: maintenant(), misAJour: maintenant() });
+    },
+
+        /* ---------- Santé ---------- */
+
+    async ajouterObservation(d: { lotId: string; symptomes: string[]; gravite: 1 | 2 | 3; maladie?: string; note?: string; date?: Jour }): Promise<Annulation> {
+      if (d.symptomes.length === 0 && !d.note?.trim()) throw new ErreurSaisie('Choisissez au moins un symptôme ou écrivez une note.');
+      return ajouterSante({ lotId: d.lotId, type: 'observation', date: d.date, symptomes: d.symptomes, gravite: d.gravite, maladie: d.maladie, note: d.note });
+    },
+
+    async ajouterVaccin(d: { lotId: string; nom: string; protocoleId?: string; dose?: string; numeroLotProduit?: string; date?: Jour }): Promise<Annulation> {
+      if (!d.nom.trim()) throw new ErreurSaisie('Indiquez le nom du vaccin.');
+      return ajouterSante({ lotId: d.lotId, type: 'vaccin', date: d.date, nom: d.nom, protocoleId: d.protocoleId, dose: d.dose, numeroLotProduit: d.numeroLotProduit });
+    },
+
+    async ajouterTraitement(d: { lotId: string; nom: string; dose?: string; voie?: string; dureeJours: number; delaiAttenteJours?: number; maladie?: string; note?: string; date?: Jour }): Promise<Annulation> {
+      if (!d.nom.trim()) throw new ErreurSaisie('Indiquez le nom du produit ou du remède.');
+      const duree = entierPositif(d.dureeJours, 'Durée du traitement');
+      const delai = d.delaiAttenteJours ?? 0;
+      if (!Number.isInteger(delai) || delai < 0) throw new ErreurSaisie('Délai d’attente : entrez un nombre de jours entier, zéro ou plus.');
+      return ajouterSante({ lotId: d.lotId, type: 'traitement', date: d.date, nom: d.nom, dose: d.dose, voie: d.voie, dureeJours: duree, delaiAttenteJours: delai, maladie: d.maladie, note: d.note });
+    },
+
+    async ajouterQuarantaine(d: { lotId: string; dureeJours: number; note?: string }): Promise<Annulation> {
+      return ajouterSante({ lotId: d.lotId, type: 'quarantaine', dureeJours: entierPositif(d.dureeJours, 'Durée'), note: d.note });
+    },
+
+    async definirResultat(evenementId: string, resultat: ResultatTraitement | undefined): Promise<void> {
+      await base.evenementsSante.update(evenementId, { resultat, misAJour: maintenant() });
+    },
+
+    async enregistrerProtocoles(protocoles: ProtocoleVaccin[]): Promise<void> {
+      await base.reglages.put({ cle: 'protocoles', valeur: protocoles });
     },
 
     /** Suppression logique : la ligne reste dans la base, l'historique est conservé. */

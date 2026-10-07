@@ -141,7 +141,7 @@ describe('alertes d’incubation', () => {
   const entree = (jour: string, partiel: Partial<EntreeAlertes> = {}): EntreeAlertes => ({
     maintenant: new Date(`${jour}T10:00:00`), especes: ESPECES_PAR_DEFAUT, seuils: SEUILS_PAR_DEFAUT,
     lots: [], logements: [], mouvements: [], pontes: [], distributions: [], entreesStock: [],
-    couveuses: [couveuse()], incubations: [inc('a', '2026-10-01', 100)], mirages: [], ...partiel,
+    couveuses: [couveuse()], incubations: [inc('a', '2026-10-01', 100)], mirages: [], evenementsSante: [], protocoles: [], ...partiel,
   });
   const incub = (jour: string, partiel?: Partial<EntreeAlertes>) => evaluerAlertes(entree(jour, partiel)).filter((a) => a.code === 'incubation');
   const miragesFaits = [mirage('a', 7, '2026-10-08', 5), mirage('a', 14, '2026-10-15', 1)];

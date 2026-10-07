@@ -17,6 +17,10 @@ body { margin: 0; background: var(--bg); color: var(--encre); font: 17px/1.45 sy
 header { background: var(--marque); color: var(--marque-encre); padding: 12px 16px; padding-top: calc(12px + env(safe-area-inset-top)); position: sticky; top: 0; z-index: 5; display: flex; align-items: baseline; gap: 10px; }
 header h1 { margin: 0; font-size: 19px; }
 header small { opacity: .9; }
+header .outils { margin-left: auto; display: flex; gap: 6px; align-self: center; }
+header .outils a { position: relative; text-decoration: none; font-size: 22px; line-height: 1; padding: 8px 10px; border-radius: 10px; }
+header .outils a.actif { background: rgba(255,255,255,.2); }
+header .outils .pastille { top: 0; right: 0; }
 main { max-width: 640px; margin: 0 auto; padding: 14px 16px 24px; }
 h2 { font-size: 17px; margin: 22px 0 8px; }
 h3 { margin: 6px 0 2px; font-size: 17px; }
@@ -91,3 +95,8 @@ nav a.actif { color: var(--marque); font-weight: 700; }
 
 progress { display: block; width: 100%; height: 8px; margin-top: 8px; accent-color: var(--marque); }
 .case + .case, .carte .case { margin-top: 12px; }
+
+.public { max-width: 640px; margin: 0 auto; padding: 0 16px 24px; }
+.public-entete { background: var(--marque); color: var(--marque-encre); margin: 0 -16px 16px; padding: 12px 16px; padding-top: calc(12px + env(safe-area-inset-top)); display: flex; align-items: baseline; gap: 10px; }
+.public-entete h1 { margin: 0; font-size: 19px; }
+.fiche h3 { margin-top: 16px; }

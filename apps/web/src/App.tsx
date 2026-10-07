@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Navigation, FournisseurNotif } from './components/ui';
+import { Navigation, FournisseurNotif, OutilsEntete } from './components/ui';
 import { db } from './db';
 import { Accueil } from './pages/Accueil';
 import { Alertes } from './pages/Alertes';
 import { FicheLot, ListeCheptel, NouveauLot } from './pages/Cheptel';
 import { FicheIncubation, NouvelleIncubation, PageAppareil, PageCouveuse } from './pages/Couveuse';
 import { Demarrage } from './pages/Demarrage';
+import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
+import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
 import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
 import { useRoute } from './route';
@@ -20,11 +22,21 @@ function Page({ elevage }: { elevage: Elevage }) {
       return <Saisie elevage={elevage} type={a} lotInitial={params.get('lot')} />;
     case 'cheptel':
       if (a === 'nouveau') return <NouveauLot elevage={elevage} />;
+      if (a && segments[2] === 'fiche') return <PartageFiche elevage={elevage} lotId={a} />;
       return a ? <FicheLot elevage={elevage} lotId={a} /> : <ListeCheptel elevage={elevage} />;
     case 'couveuse':
       if (a === 'nouvelle') return <NouvelleIncubation elevage={elevage} />;
       if (a === 'appareil') return <PageAppareil elevage={elevage} id={segments[2]} />;
       return a ? <FicheIncubation elevage={elevage} id={a} /> : <PageCouveuse elevage={elevage} />;
+    case 'sante':
+      if (a === 'probleme') return <FormProbleme elevage={elevage} lotInitial={params.get('lot')} />;
+      if (a === 'vaccin') return <FormVaccin elevage={elevage} lotInitial={params.get('lot')} protocoleInitial={params.get('protocole')} />;
+      if (a === 'traitement') return <FormTraitement elevage={elevage} lotInitial={params.get('lot')} maladieInitiale={params.get('maladie')} />;
+      if (a === 'quarantaine') return <FormQuarantaine elevage={elevage} lotInitial={params.get('lot')} />;
+      if (a === 'remedes') return <PageRemedes elevage={elevage} />;
+      if (a === 'calendrier') return <PageCalendrier elevage={elevage} />;
+      if (a === 'historique') return <PageHistorique elevage={elevage} />;
+      return <PageSante elevage={elevage} />;
     case 'alertes':
       return <Alertes elevage={elevage} />;
     case 'reglages':
@@ -34,7 +46,16 @@ function Page({ elevage }: { elevage: Elevage }) {
   }
 }
 
-export function App() {
+/** Une fiche partagée s'ouvre sans toucher aux données de l'éleveur. */
+function Racine() {
+  const { segments } = useRoute();
+  if (segments[0] === 'fiche' && segments[1]) return <PageFichePublique jeton={segments[1]} />;
+  return <Application />;
+}
+
+export const App = Racine;
+
+function Application() {
   const elevage = useElevage();
   const [stockageBloque, setStockageBloque] = useState(false);
   useEffect(() => {
@@ -58,11 +79,12 @@ export function App() {
       <header>
         <h1>Digitalab</h1>
         <small>{elevage.reglages.nomElevage || 'Mon élevage'}</small>
+        <OutilsEntete nbAlertes={nbAlertes} />
       </header>
       <main>
         <Page elevage={elevage} />
       </main>
-      <Navigation nbAlertes={nbAlertes} />
+      <Navigation />
     </FournisseurNotif>
   );
 }

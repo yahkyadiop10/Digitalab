@@ -1,10 +1,11 @@
-import { ESPECES_PAR_DEFAUT, SEUILS_PAR_DEFAUT, type EspeceConfig, type Seuils } from '@digitalab/core';
+import { ESPECES_PAR_DEFAUT, PROTOCOLES_PAR_DEFAUT, SEUILS_PAR_DEFAUT, type EspeceConfig, type ProtocoleVaccin, type Seuils } from '@digitalab/core';
 
 export interface Reglages {
   nomElevage: string;
   demarrageFait: boolean;
   seuils: Seuils;
   especes: Record<string, EspeceConfig>;
+  protocoles: ProtocoleVaccin[];
 }
 
 export function fusionnerReglages(brut: Record<string, unknown>): Reglages {
@@ -17,5 +18,6 @@ export function fusionnerReglages(brut: Record<string, unknown>): Reglages {
     demarrageFait: brut['demarrageFait'] === true,
     seuils: { ...SEUILS_PAR_DEFAUT, ...s },
     especes,
+    protocoles: Array.isArray(brut['protocoles']) ? (brut['protocoles'] as ProtocoleVaccin[]) : PROTOCOLES_PAR_DEFAUT,
   };
 }

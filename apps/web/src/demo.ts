@@ -11,7 +11,7 @@ export async function chargerDemo(): Promise<void> {
 
   const poulailler = await repo.creerLogement({ nom: 'Poulailler 1', type: 'batiment', surfaceM2: 12 });
   const cages = await repo.creerLogement({ nom: 'Batterie cailles A', type: 'cage', surfaceM2: 1.2 });
-  const soie = await repo.creerLot({ nom: 'Soie blanche – lot A', especeCode: 'poule', race: 'Soie', logementId: poulailler, effectif: 18 });
+  const soie = await repo.creerLot({ nom: 'Soie blanche – lot A', especeCode: 'poule', race: 'Soie', naissance: j(25), logementId: poulailler, effectif: 18 });
   const brahma = await repo.creerLot({ nom: 'Brahma reproducteurs', especeCode: 'poule', race: 'Brahma', logementId: poulailler, effectif: 10 });
   const cailles = await repo.creerLot({ nom: 'Cailles japonaises – lot 1', especeCode: 'caille', race: 'Japonaise', logementId: cages, effectif: 60 });
 
@@ -30,6 +30,16 @@ export async function chargerDemo(): Promise<void> {
       await db.distributions.add({ id: nouvelId(), ...bruit, lotId, date: jour, quantiteKg: kg });
     }
   }
+  // Santé : Soie blanche (25 jours) a reçu Newcastle et Gumboro ; le rappel Gumboro est en retard.
+  await db.evenementsSante.bulkAdd([
+    { id: nouvelId(), ...bruit, lotId: soie, type: 'vaccin', date: j(18), nom: 'Newcastle (1re dose)', protocoleId: 'poule-newcastle-1', numeroLotProduit: 'NC-2291' },
+    { id: nouvelId(), ...bruit, lotId: soie, type: 'vaccin', date: j(11), nom: 'Gumboro (1re dose)', protocoleId: 'poule-gumboro-1' },
+    { id: nouvelId(), ...bruit, lotId: soie, type: 'vaccin', date: j(4), nom: 'Newcastle (rappel)', protocoleId: 'poule-newcastle-2' },
+    { id: nouvelId(), ...bruit, lotId: soie, type: 'traitement', date: j(2), nom: 'Vitamines dans l’eau', voie: 'eau', dureeJours: 5, delaiAttenteJours: 2, note: 'Après la chaleur' },
+    { id: nouvelId(), ...bruit, lotId: brahma, type: 'observation', date: j(20), symptomes: ['eternuements', 'toux'], gravite: 1 },
+    { id: nouvelId(), ...bruit, lotId: brahma, type: 'traitement', date: j(19), nom: 'Tisane de thym', voie: 'eau', dureeJours: 5, delaiAttenteJours: 0, resultat: 'gueri' },
+  ]);
+
   // Couveuse de 150 œufs de poule, avec deux mises en incubation à des stades différents.
   const couveuse = await repo.creerCouveuse({ nom: 'Couveuse 150 œufs', type: 'automatique', capacites: { poule: 150 }, eclosoirSepare: false });
   const a = nouvelId();
