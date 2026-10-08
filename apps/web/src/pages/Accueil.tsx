@@ -1,5 +1,6 @@
 import { ajouterJours, consommationMoyenneKg, jourLocal, stockAlimentKg, tachesIncubation, vaccinsAFaire } from '@digitalab/core';
 import { Badge, CarteAlerte } from '../components/ui';
+import { Tableau } from '../components/Tableau';
 import { NIVEAUX, fr } from '../i18n/fr';
 import type { Elevage } from '../useElevage';
 
@@ -36,7 +37,7 @@ export function Accueil({ elevage }: { elevage: Elevage }) {
   const message = niveauGlobal === 'vert' ? NIVEAUX.vert : `${aTraiter.length} ${aTraiter.length > 1 ? 'alertes' : 'alerte'} · ${NIVEAUX[niveauGlobal].toLowerCase()}`;
 
   return (
-    <>
+    <div className="accueil">
       <p className="muet">{fr.jour(maintenant)}</p>
       <div className={`bandeau n-${niveauGlobal}`} role="status">
         <Badge niveau={niveauGlobal} />
@@ -67,6 +68,7 @@ export function Accueil({ elevage }: { elevage: Elevage }) {
         ))
       )}
       {lotsActifs.length === 0 && <a className="gros" href="#/cheptel/nouveau">🐔 Créer un lot<span>Nom, espèce, nombre d’animaux</span></a>}
-    </>
+      <Tableau elevage={elevage} />
+    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { effectifs, jourLocal, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { effectifs, jourLocal, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -12,7 +12,7 @@ export const nouvelId = (): string =>
 const maintenant = () => Date.now();
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
-export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations';
+export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations' | 'notesQuarantaine';
 
 /** Référence d'un enregistrement créé, pour pouvoir l'annuler juste après. */
 export interface Annulation {
@@ -327,6 +327,116 @@ export function creerRepo(base: BaseElevage = db) {
     /** Marque une dépense comme payée ou une recette comme encaissée. */
     async marquerPaye(id: string, paye: boolean): Promise<void> {
       await base.operations.update(id, { paye, payeLe: paye ? aujourdhui() : undefined, misAJour: maintenant() });
+    },
+
+    /* ---------- Quarantaine des nouveaux arrivants ---------- */
+
+    /** Retrouve la zone de quarantaine, ou la crée si l'élevage n'en a pas encore. */
+    async assurerZoneQuarantaine(): Promise<string> {
+      const existante = (await base.logements.toArray()).find((l) => l.type === 'quarantaine' && !l.supprimeLe);
+      if (existante) return existante.id;
+      const id = nouvelId();
+      await base.logements.add({ id, misAJour: maintenant(), nom: 'Zone de quarantaine', type: 'quarantaine', surfaceM2: null });
+      return id;
+    },
+
+    /**
+     * Enregistre l'arrivée d'animaux : crée leur lot (dans la zone de quarantaine), leur effectif de départ,
+     * leur fiche de quarantaine et, si un prix est donné, la dépense d'achat.
+     */
+    async creerQuarantaine(d: {
+      nom: string; especeCode: string; race?: string; nombre: number; ageJours?: number; origine?: string; arrivee?: Jour; dureeJours: number;
+      logementId?: string | null; alimentation?: string; etatArrivee?: EtatArrivee; noteArrivee?: string; prixTotal?: number;
+    }): Promise<string> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom à cet arrivage.');
+      const nombre = entierPositif(d.nombre, 'Nombre d’animaux');
+      const dureeJours = entierPositif(d.dureeJours, 'Durée de quarantaine');
+      const arrivee = d.arrivee ?? aujourdhui();
+      if (arrivee > aujourdhui()) throw new ErreurSaisie('La date d’arrivée ne peut pas être dans le futur.');
+      if (d.ageJours !== undefined && (!Number.isFinite(d.ageJours) || d.ageJours < 0)) throw new ErreurSaisie('Âge : entrez un nombre de jours, zéro ou plus.');
+      if (d.prixTotal !== undefined && (!Number.isInteger(d.prixTotal) || d.prixTotal <= 0)) throw new ErreurSaisie('Prix : entrez un nombre entier de FCFA supérieur à zéro.');
+      const logementId = d.logementId || (await this.assurerZoneQuarantaine());
+      const lotId = nouvelId();
+      const id = nouvelId();
+      await base.transaction('rw', base.lots, base.mouvements, base.quarantaines, base.operations, async () => {
+        await base.lots.add({
+          id: lotId, misAJour: maintenant(), nom, especeCode: d.especeCode, logementId,
+          ...(d.race?.trim() ? { race: d.race.trim() } : {}),
+          ...(d.ageJours !== undefined ? { naissance: naissanceEstimee(arrivee, d.ageJours) } : {}),
+        });
+        await ajouterMouvement(lotId, 'arrivee', nombre, { date: arrivee, note: 'Arrivée en quarantaine' });
+        await base.quarantaines.add({
+          id, misAJour: maintenant(), nom, lotId, especeCode: d.especeCode, nombre, arrivee, dureeJours, logementId, etapes: [],
+          ...(d.race?.trim() ? { race: d.race.trim() } : {}),
+          ...(d.ageJours !== undefined ? { ageJours: Math.round(d.ageJours) } : {}),
+          ...(d.origine?.trim() ? { origine: d.origine.trim() } : {}),
+          ...(d.alimentation?.trim() ? { alimentation: d.alimentation.trim() } : {}),
+          ...(d.etatArrivee ? { etatArrivee: d.etatArrivee } : {}),
+          ...(d.noteArrivee?.trim() ? { noteArrivee: d.noteArrivee.trim() } : {}),
+        });
+        if (d.prixTotal) {
+          await base.operations.add({ id: nouvelId(), misAJour: maintenant(), date: arrivee, sens: 'depense', categorie: 'achat_animaux', montant: d.prixTotal, lotId, paye: true, payeLe: arrivee, ...(d.origine?.trim() ? { tiers: d.origine.trim() } : {}) });
+        }
+      });
+      return id;
+    },
+
+    /** Ajoute une ligne au journal d'observation de la quarantaine. */
+    async ajouterNoteQuarantaine(d: { quarantaineId: string; date?: Jour; etat: EtatNote; comportements: string[]; alimentation?: string; poidsMoyenG?: number; malades?: number; note?: string }): Promise<Annulation> {
+      const q = await base.quarantaines.get(d.quarantaineId);
+      if (!q || q.supprimeLe) throw new ErreurSaisie('Quarantaine introuvable.');
+      if (d.comportements.length === 0 && !d.note?.trim() && !d.alimentation?.trim() && d.poidsMoyenG === undefined) {
+        throw new ErreurSaisie('Notez au moins un comportement, une alimentation, un poids ou une remarque.');
+      }
+      if (d.poidsMoyenG !== undefined && (!Number.isFinite(d.poidsMoyenG) || d.poidsMoyenG <= 0)) throw new ErreurSaisie('Poids : entrez un nombre de grammes supérieur à zéro.');
+      if (d.malades !== undefined && (!Number.isInteger(d.malades) || d.malades < 0)) throw new ErreurSaisie('Animaux malades : entrez un nombre entier, zéro ou plus.');
+      const date = d.date ?? aujourdhui();
+      if (date > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
+      const id = nouvelId();
+      await base.notesQuarantaine.add({
+        id, misAJour: maintenant(), quarantaineId: q.id, date, etat: d.etat, comportements: d.comportements,
+        ...(d.alimentation?.trim() ? { alimentation: d.alimentation.trim() } : {}),
+        ...(d.poidsMoyenG !== undefined ? { poidsMoyenG: d.poidsMoyenG } : {}),
+        ...(d.malades !== undefined ? { malades: d.malades } : {}),
+        ...(d.note?.trim() ? { note: d.note.trim() } : {}),
+      });
+      return { table: 'notesQuarantaine', id };
+    },
+
+    /** Coche ou décoche un contrôle de la quarantaine (examen, déparasitage…). */
+    async definirEtapeQuarantaine(id: string, code: string, fait: boolean): Promise<void> {
+      const q = await base.quarantaines.get(id);
+      if (!q) throw new ErreurSaisie('Quarantaine introuvable.');
+      const etapes = new Set(q.etapes);
+      if (fait) etapes.add(code);
+      else etapes.delete(code);
+      await base.quarantaines.update(id, { etapes: [...etapes], misAJour: maintenant() });
+    },
+
+    async prolongerQuarantaine(id: string, jours: number): Promise<void> {
+      const q = await base.quarantaines.get(id);
+      if (!q) throw new ErreurSaisie('Quarantaine introuvable.');
+      await base.quarantaines.update(id, { dureeJours: q.dureeJours + entierPositif(jours, 'Prolongation'), misAJour: maintenant() });
+    },
+
+    /** Termine la quarantaine : les animaux entrent dans l'élevage (dans le local choisi) ou restent écartés. */
+    async terminerQuarantaine(d: { id: string; decision: 'integre' | 'ecarte'; logementId?: string | null; note?: string }): Promise<void> {
+      const q = await base.quarantaines.get(d.id);
+      if (!q || q.supprimeLe) throw new ErreurSaisie('Quarantaine introuvable.');
+      if (q.sortie) throw new ErreurSaisie('Cette quarantaine est déjà terminée.');
+      await base.transaction('rw', base.lots, base.quarantaines, async () => {
+        if (d.decision === 'integre') await base.lots.update(q.lotId, { logementId: d.logementId ?? null, misAJour: maintenant() });
+        await base.quarantaines.update(q.id, {
+          sortie: { jour: aujourdhui(), decision: d.decision, ...(d.decision === 'integre' ? { logementId: d.logementId ?? null } : {}), ...(d.note?.trim() ? { note: d.note.trim() } : {}) },
+          misAJour: maintenant(),
+        });
+      });
+    },
+
+    /** Rouvre une quarantaine terminée par erreur (le lot reste où il est). */
+    async rouvrirQuarantaine(id: string): Promise<void> {
+      await base.quarantaines.update(id, { sortie: undefined, misAJour: maintenant() });
     },
 
     /** Suppression logique : la ligne reste dans la base, l'historique est conservé. */

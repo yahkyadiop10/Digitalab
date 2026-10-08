@@ -2,6 +2,7 @@ import { ajouterJours, ecartJours, jourLocal } from './dates';
 import { decesEntre, effectifs } from './effectif';
 import { incubationsEnCours, profilDe, suivreEtapes } from './incubation';
 import { delaisEnCours, vaccinsAFaire } from './sante';
+import { derniereNote, quarantainesActives, suivreQuarantaine } from './quarantaine';
 import type {
   Alerte,
   DonneesElevage,
@@ -34,6 +35,7 @@ export function evaluerAlertes(e: EntreeAlertes): Alerte[] {
     ...alertesStockAliment(e),
     ...alertesIncubation(e),
     ...alertesSante(e),
+    ...alertesQuarantaine(e),
   ];
   return alertes.sort((a, b) => RANG[b.niveau] - RANG[a.niveau] || a.cle.localeCompare(b.cle));
 }
@@ -217,6 +219,25 @@ function alertesSante(e: EntreeAlertes): Alerte[] {
   }
   for (const [logementId, lotsTouches] of parLocal) {
     if (lotsTouches.size >= 2) out.push({ cle: `foyer:${logementId}:${aujourdhui}`, code: 'foyer', niveau: 'rouge', logementId, params: { lots: lotsTouches.size } });
+  }
+  return out;
+}
+
+function alertesQuarantaine(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const out: Alerte[] = [];
+  for (const q of quarantainesActives(e.quarantaines)) {
+    const s = suivreQuarantaine(q, aujourdhui);
+    if (s.statut === 'fin_proche' || s.statut === 'a_decider') {
+      out.push({
+        cle: `quarantaine:${q.id}:fin:${s.statut}`, code: 'quarantaine', niveau: s.statut === 'a_decider' ? 'orange' : 'jaune',
+        quarantaineId: q.id, lotId: q.lotId, etape: 'fin', params: { restants: s.joursRestants, retard: Math.max(0, -s.joursRestants) },
+      });
+    }
+    const note = derniereNote(e.notesQuarantaine, q.id);
+    if (note && note.etat === 'inquietant' && note.date >= ajouterJours(aujourdhui, -1)) {
+      out.push({ cle: `quarantaine:${q.id}:inquiet:${note.id}`, code: 'quarantaine', niveau: 'orange', quarantaineId: q.id, lotId: q.lotId, etape: 'inquiet', params: { malades: note.malades ?? 0 } });
+    }
   }
   return out;
 }

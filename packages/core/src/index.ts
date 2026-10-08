@@ -5,5 +5,7 @@ export * from './fiche';
 export * from './finances';
 export * from './incubation';
 export * from './parametres';
+export * from './quarantaine';
 export * from './sante';
+export * from './tableau';
 export * from './types';

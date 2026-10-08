@@ -17,12 +17,10 @@ import {
 } from '@digitalab/core';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
+import { dateCourte, formatMontant, signe } from '../format';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
 
-const formatMontant = (n: number) => `${new Intl.NumberFormat('fr-FR').format(Math.abs(n)).replace(/[  ]/g, ' ')} FCFA`;
-const signe = (n: number) => (n < 0 ? '−' : n > 0 ? '+' : '');
-const dateCourte = (j: string) => j.slice(5).split('-').reverse().join('/');
 const nomMois = (p: string) => new Date(`${p}-15T12:00:00`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
 export function PageFinances({ elevage }: { elevage: Elevage }) {

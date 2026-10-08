@@ -9,7 +9,7 @@ export interface Enregistrement {
   supprimeLe?: number | null;
 }
 
-export type TypeLogement = 'batiment' | 'cage' | 'voliere' | 'parc';
+export type TypeLogement = 'batiment' | 'cage' | 'voliere' | 'parc' | 'quarantaine';
 
 export interface Logement extends Enregistrement {
   nom: string;
@@ -128,6 +128,50 @@ export interface Incubation extends Enregistrement {
   eclosion?: EclosionResultat;
 }
 
+export type EtatArrivee = 'bon' | 'moyen' | 'mauvais';
+
+/** Zone de quarantaine : des animaux nouvellement arrivés, tenus à l'écart avant d'entrer dans l'élevage. */
+export interface Quarantaine extends Enregistrement {
+  nom: string;
+  /** Lot créé à l'arrivée : l'effectif, les décès, la santé et l'alimentation passent par lui. */
+  lotId: string;
+  especeCode: string;
+  race?: string;
+  /** Nombre d'animaux à l'arrivée. */
+  nombre: number;
+  /** Âge approximatif à l'arrivée, en jours. */
+  ageJours?: number;
+  /** Vendeur ou provenance. */
+  origine?: string;
+  arrivee: Jour;
+  dureeJours: number;
+  logementId?: string | null;
+  /** Alimentation prévue ou utilisée à l'arrivée. */
+  alimentation?: string;
+  etatArrivee?: EtatArrivee;
+  noteArrivee?: string;
+  /** Contrôles faits : « examen », « deparasitage », « vaccins », « pesee ». */
+  etapes: string[];
+  /** Renseigné quand la quarantaine est terminée. */
+  sortie?: { jour: Jour; decision: 'integre' | 'ecarte'; logementId?: string | null; note?: string };
+}
+
+export type EtatNote = 'bien' | 'moyen' | 'inquietant';
+
+/** Une ligne du journal d'observation d'une quarantaine. */
+export interface NoteQuarantaine extends Enregistrement {
+  quarantaineId: string;
+  date: Jour;
+  etat: EtatNote;
+  /** Codes des comportements observés (voir COMPORTEMENTS). */
+  comportements: string[];
+  alimentation?: string;
+  poidsMoyenG?: number;
+  /** Nombre d'animaux qui semblent malades. */
+  malades?: number;
+  note?: string;
+}
+
 export type TypeSante = 'observation' | 'vaccin' | 'traitement' | 'quarantaine';
 export type ResultatTraitement = 'gueri' | 'ameliore' | 'sans_effet';
 
@@ -185,7 +229,7 @@ export interface Seuils {
 }
 
 export type Niveau = 'jaune' | 'orange' | 'rouge';
-export type CodeAlerte = 'densite' | 'mortalite' | 'chute_ponte' | 'stock_aliment' | 'incubation' | 'vaccin' | 'delai_attente' | 'foyer' | 'sante_grave';
+export type CodeAlerte = 'densite' | 'mortalite' | 'chute_ponte' | 'stock_aliment' | 'incubation' | 'vaccin' | 'delai_attente' | 'foyer' | 'sante_grave' | 'quarantaine';
 
 export interface Alerte {
   /** Identifiant stable, utilisé pour « pris en charge » et « reporter ». */
@@ -195,7 +239,9 @@ export interface Alerte {
   lotId?: string;
   logementId?: string;
   incubationId?: string;
-  /** Pour une alerte d'incubation : « mirage », « retournement », « transfert » ou « eclosion ». */
+  /** Quarantaine d'arrivants concernée. */
+  quarantaineId?: string;
+  /** Pour une alerte d'incubation : « mirage », « retournement », « transfert » ou « eclosion » ; pour la quarantaine : « fin » ou « inquiet ». */
   etape?: string;
   /** Pour une alerte de vaccin : nom du vaccin. */
   libelle?: string;
@@ -214,4 +260,6 @@ export interface DonneesElevage {
   incubations: Incubation[];
   mirages: Mirage[];
   evenementsSante: EvenementSante[];
+  quarantaines: Quarantaine[];
+  notesQuarantaine: NoteQuarantaine[];
 }

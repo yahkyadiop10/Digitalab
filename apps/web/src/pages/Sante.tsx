@@ -60,7 +60,7 @@ export function PageSante({ elevage }: { elevage: Elevage }) {
       <div className="rangee">
         <a className="bouton alt court" href="#/sante/vaccin">💉 Vaccin fait</a>
         <a className="bouton alt court" href="#/sante/traitement">💊 Traitement</a>
-        <a className="bouton alt court" href="#/sante/quarantaine">🚧 Quarantaine</a>
+        <a className="bouton alt court" href="#/quarantaine">🚧 Quarantaine</a>
       </div>
 
       <h2>Vaccins à faire</h2>

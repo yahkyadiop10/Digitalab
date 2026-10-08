@@ -231,3 +231,83 @@ describe('finances', () => {
     expect(await base.operations.count()).toBe(1);
   });
 });
+
+describe('quarantaine des nouveaux arrivants', () => {
+  const arrivage = (partiel: Partial<Parameters<Repo['creerQuarantaine']>[0]> = {}) =>
+    repo.creerQuarantaine({ nom: 'Arrivage', especeCode: 'poule', nombre: 8, dureeJours: 21, ...partiel });
+
+  it('crée le lot dans la zone de quarantaine, avec sa fiche, son effectif et sa naissance estimée', async () => {
+    const id = await arrivage({ race: ' Padoue ', ageJours: 56, origine: 'M. Sow', arrivee: '2026-10-01', alimentation: 'Aliment ponte' });
+    const q = (await base.quarantaines.get(id))!;
+    expect(q).toMatchObject({ nombre: 8, dureeJours: 21, race: 'Padoue', ageJours: 56, origine: 'M. Sow', arrivee: '2026-10-01', etapes: [] });
+    const lot = (await base.lots.get(q.lotId))!;
+    expect(lot).toMatchObject({ nom: 'Arrivage', race: 'Padoue', naissance: '2026-08-06' });
+    expect(await effectif(q.lotId)).toBe(8);
+    const zone = (await base.logements.toArray()).filter((l) => l.type === 'quarantaine');
+    expect(zone).toHaveLength(1);
+    expect(lot.logementId).toBe(zone[0]!.id);
+    await arrivage();
+    expect((await base.logements.toArray()).filter((l) => l.type === 'quarantaine')).toHaveLength(1);
+  });
+
+  it('note l’achat dans les finances quand un prix est donné', async () => {
+    const id = await arrivage({ prixTotal: 64000, origine: 'M. Sow' });
+    const lotId = (await base.quarantaines.get(id))!.lotId;
+    expect((await base.operations.toArray())[0]).toMatchObject({ sens: 'depense', categorie: 'achat_animaux', montant: 64000, lotId, tiers: 'M. Sow', paye: true });
+  });
+
+  it('refuse un arrivage sans nom, sans animaux, sans durée ou daté du futur', async () => {
+    await expect(arrivage({ nom: ' ' })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(arrivage({ nombre: 0 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(arrivage({ dureeJours: 0 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(arrivage({ arrivee: '2999-01-01' })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(arrivage({ ageJours: -3 })).rejects.toBeInstanceOf(ErreurSaisie);
+    expect(await base.lots.count()).toBe(0);
+  });
+
+  it('tient le journal : comportements, poids, annulation, et refuse une note vide', async () => {
+    const id = await arrivage();
+    await expect(repo.ajouterNoteQuarantaine({ quarantaineId: id, etat: 'bien', comportements: [] })).rejects.toBeInstanceOf(ErreurSaisie);
+    const a = await repo.ajouterNoteQuarantaine({ quarantaineId: id, etat: 'moyen', comportements: ['mange_peu'], poidsMoyenG: 1350, note: 'Fatiguées' });
+    expect(await base.notesQuarantaine.get(a.id)).toMatchObject({ etat: 'moyen', poidsMoyenG: 1350, comportements: ['mange_peu'] });
+    await expect(repo.ajouterNoteQuarantaine({ quarantaineId: id, etat: 'bien', comportements: ['actif'], poidsMoyenG: -2 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await repo.annuler(a);
+    expect((await base.notesQuarantaine.get(a.id))?.supprimeLe).toBeTruthy();
+  });
+
+  it('prolonge, coche les contrôles, puis intègre les animaux dans le local choisi', async () => {
+    const lg = await repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: 20 });
+    const id = await arrivage();
+    await repo.prolongerQuarantaine(id, 7);
+    expect((await base.quarantaines.get(id))?.dureeJours).toBe(28);
+    await repo.definirEtapeQuarantaine(id, 'examen', true);
+    await repo.definirEtapeQuarantaine(id, 'pesee', true);
+    await repo.definirEtapeQuarantaine(id, 'pesee', false);
+    expect((await base.quarantaines.get(id))?.etapes).toEqual(['examen']);
+    await repo.terminerQuarantaine({ id, decision: 'integre', logementId: lg, note: 'Tout va bien' });
+    const q = (await base.quarantaines.get(id))!;
+    expect(q.sortie).toMatchObject({ decision: 'integre', logementId: lg, note: 'Tout va bien' });
+    expect((await base.lots.get(q.lotId))?.logementId).toBe(lg);
+    await expect(repo.terminerQuarantaine({ id, decision: 'ecarte' })).rejects.toThrow('déjà terminée');
+    await repo.rouvrirQuarantaine(id);
+    expect((await base.quarantaines.get(id))?.sortie).toBeUndefined();
+  });
+
+  it('ne déplace pas le lot quand les animaux sont écartés', async () => {
+    const id = await arrivage();
+    const q0 = (await base.quarantaines.get(id))!;
+    const avant = (await base.lots.get(q0.lotId))?.logementId;
+    await repo.terminerQuarantaine({ id, decision: 'ecarte', logementId: 'ailleurs' });
+    expect((await base.lots.get(q0.lotId))?.logementId).toBe(avant);
+  });
+
+  it('sauvegarde et restaure aussi les quarantaines et leur journal', async () => {
+    const id = await arrivage();
+    await repo.ajouterNoteQuarantaine({ quarantaineId: id, etat: 'bien', comportements: ['actif'] });
+    const json = await repo.exporter();
+    await repo.toutEffacer();
+    await repo.importer(json);
+    expect(await base.quarantaines.count()).toBe(1);
+    expect(await base.notesQuarantaine.count()).toBe(1);
+  });
+});

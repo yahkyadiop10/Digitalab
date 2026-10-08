@@ -24,6 +24,7 @@ export function ListeCheptel({ elevage }: { elevage: Elevage }) {
         </a>
       ))}
       <a className="bouton" href="#/cheptel/nouveau">+ Nouveau lot</a>
+      <a className="bouton alt" href="#/quarantaine">🚧 Zone de quarantaine{donnees.quarantaines.filter((q) => !q.sortie).length > 0 ? ` (${donnees.quarantaines.filter((q) => !q.sortie).length})` : ''}</a>
       {archives.length > 0 && <p className="muet">{archives.length} lot(s) archivé(s).</p>}
     </>
   );

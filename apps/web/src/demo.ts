@@ -54,6 +54,18 @@ export async function chargerDemo(): Promise<void> {
     { id: nouvelId(), ...bruit, incubationId: b, etape: 14, jour: j(4), clairs: 1, morts: 2 },
   ]);
   await db.entreesStock.add({ id: nouvelId(), ...bruit, date: j(8), quantiteKg: 120, prixTotal: 54000 });
+  // Zone de quarantaine : un arrivage de 8 poules Padoue arrivé il y a 9 jours, avec son journal.
+  const arrivage = await repo.creerQuarantaine({
+    nom: 'Padoue – arrivage de M. Sow', especeCode: 'poule', race: 'Padoue', nombre: 8, ageJours: 120, origine: 'M. Sow, Thiès', arrivee: j(9), dureeJours: 21,
+    alimentation: 'Aliment ponte, 110 g par poule et par jour', etatArrivee: 'moyen', noteArrivee: 'Fatiguées par le transport, deux ont les plumes abîmées.', prixTotal: 64000,
+  });
+  await repo.definirEtapeQuarantaine(arrivage, 'examen', true);
+  await db.notesQuarantaine.bulkAdd([
+    { id: nouvelId(), ...bruit, quarantaineId: arrivage, date: j(8), etat: 'moyen', comportements: ['mange_peu', 'plumes'], alimentation: 'Aliment ponte', poidsMoyenG: 1350, note: 'Elles se reposent beaucoup.' },
+    { id: nouvelId(), ...bruit, quarantaineId: arrivage, date: j(4), etat: 'bien', comportements: ['mange_bien', 'actif', 'fientes_normales'], poidsMoyenG: 1420 },
+    { id: nouvelId(), ...bruit, quarantaineId: arrivage, date: j(1), etat: 'bien', comportements: ['mange_bien', 'actif', 'sociable'], poidsMoyenG: 1480, note: 'Rien à signaler.' },
+  ]);
+
   await db.operations.bulkAdd([
     { id: nouvelId(), ...bruit, date: j(6), sens: 'recette', categorie: 'oeufs', montant: 18000, paye: true, payeLe: j(6), tiers: 'Marché' },
     { id: nouvelId(), ...bruit, date: j(3), sens: 'recette', categorie: 'poussins', montant: 45000, paye: false, tiers: 'M. Diop', lotId: soie },

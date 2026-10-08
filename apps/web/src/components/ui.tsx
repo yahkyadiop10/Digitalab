@@ -118,6 +118,7 @@ const ONGLETS: readonly { cle: string; icone: string; libelle: string; bureau?: 
   { cle: 'cheptel', icone: '🐔', libelle: 'Cheptel' },
   { cle: 'couveuse', icone: '🥚', libelle: 'Couveuse' },
   { cle: 'sante', icone: '🩺', libelle: 'Santé' },
+  { cle: 'quarantaine', icone: '🚧', libelle: 'Quarantaine', bureau: true },
   { cle: 'finances', icone: '💰', libelle: 'Finances', bureau: true },
 ];
 

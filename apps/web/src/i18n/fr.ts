@@ -9,12 +9,13 @@ export const NIVEAUX: Record<Niveau | 'vert', string> = {
 
 export const CAUSES_DECES = ['Inconnue', 'Maladie', 'Prédateur', 'Chaleur ou froid', 'Accident', 'Naturelle'] as const;
 
-export const TYPES_LOGEMENT = { batiment: 'Bâtiment', cage: 'Cage', voliere: 'Volière', parc: 'Parc' } as const;
+export const TYPES_LOGEMENT = { batiment: 'Bâtiment', cage: 'Cage', voliere: 'Volière', parc: 'Parc', quarantaine: 'Zone de quarantaine' } as const;
 
 export interface Noms {
   lot: (id?: string) => string;
   logement: (id?: string) => string;
   incubation: (id?: string) => string;
+  quarantaine: (id?: string) => string;
 }
 
 export interface MessageAlerte {
@@ -114,6 +115,21 @@ export function messageAlerte(a: Alerte, noms: Noms): MessageAlerte {
         detail: `${p.lots} lots du même local présentent des symptômes inquiétants.`,
         conseil: 'Limitez les déplacements entre lots, désinfectez le matériel et prévenez un vétérinaire.',
       };
+    case 'quarantaine': {
+      const nom = noms.quarantaine(a.quarantaineId);
+      if (a.etape === 'inquiet') {
+        const malades = p.malades ?? 0;
+        return {
+          titre: `Quarantaine inquiétante : ${nom}`,
+          detail: malades > 0 ? `${malades} ${pluriel(malades, 'animal semble malade', 'animaux semblent malades')} d’après la dernière note.` : 'La dernière note est inquiétante.',
+          conseil: 'Gardez le groupe à l’écart, notez les symptômes dans l’onglet Santé et demandez conseil à un vétérinaire.',
+        };
+      }
+      const retard = p.retard ?? 0;
+      return retard > 0 || (p.restants ?? 1) <= 0
+        ? { titre: `Fin de quarantaine à décider : ${nom}`, detail: retard > 0 ? `La durée prévue est dépassée de ${retard} ${pluriel(retard, 'jour', 'jours')}.` : 'La durée prévue se termine aujourd’hui.', conseil: 'Si les animaux sont en bonne santé, intégrez-les à l’élevage ; sinon prolongez la quarantaine.' }
+        : { titre: `Fin de quarantaine demain : ${nom}`, detail: 'Faites le point sur les observations avant de décider.', conseil: 'Relisez le journal et vérifiez que les contrôles prévus sont faits.' };
+    }
     case 'stock_aliment':
       return a.niveau === 'rouge'
         ? { titre: 'Stock d’aliment épuisé', detail: 'Le stock enregistré est à zéro.', conseil: 'Achetez de l’aliment, puis enregistrez l’achat.' }

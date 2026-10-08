@@ -29,6 +29,7 @@ export function Saisie({ elevage, type, lotInitial }: { elevage: Elevage; type?:
         <a className="gros" href="#/sante/probleme">🩺 Problème de santé<span>Symptômes, pistes à vérifier</span></a>
         <a className="gros" href="#/sante/vaccin">💉 Vaccin fait<span>Date, vaccin, numéro de flacon</span></a>
         <a className="gros" href="#/couveuse/nouvelle">🥚 Mise en incubation<span>Mettre des œufs dans la couveuse</span></a>
+        <a className="gros" href="#/quarantaine/arrivee">🚧 Nouvelle arrivée<span>Animaux achetés, mis en quarantaine</span></a>
         <a className="gros" href="#/cheptel/nouveau">🐔 Nouveau lot<span>Arrivée ou création d’un groupe d’animaux</span></a>
       </>
     );

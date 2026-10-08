@@ -123,7 +123,7 @@ describe('alertes de santé', () => {
     lots: [lot('a', { logementId: 'g' }), lot('b', { logementId: 'g' }), lot('c', { logementId: 'h' })],
     logements: [{ id: 'g', ...base, nom: 'G', type: 'batiment', surfaceM2: 100 }, { id: 'h', ...base, nom: 'H', type: 'batiment', surfaceM2: 100 }],
     mouvements: [arrivee('a', 10), arrivee('b', 10), arrivee('c', 10)],
-    pontes: [], distributions: [], entreesStock: [], couveuses: [], incubations: [], mirages: [], evenementsSante: [], ...partiel,
+    pontes: [], distributions: [], entreesStock: [], couveuses: [], incubations: [], mirages: [], evenementsSante: [], quarantaines: [], notesQuarantaine: [], ...partiel,
   });
   const sante = (partiel?: Partial<EntreeAlertes>) => evaluerAlertes(entree(partiel)).filter((a) => ['vaccin', 'delai_attente', 'foyer', 'sante_grave'].includes(a.code));
 
@@ -158,7 +158,7 @@ describe('fiche de suivi', () => {
     pontes: [{ id: 'p', ...base, lotId: 'a', date: '2026-10-05', nombre: 6, casses: 0 }, { id: 'p0', ...base, lotId: 'a', date: '2026-08-01', nombre: 99, casses: 0 }],
     distributions: [], entreesStock: [], couveuses: [],
     incubations: [{ id: 'i', ...base, couveuseId: 'c', especeCode: 'poule', nom: 'Série 1', miseEnPlace: '2026-08-17', nbOeufs: 20, origine: 'Mes Soie', faits: [] }],
-    mirages: [],
+    mirages: [], quarantaines: [], notesQuarantaine: [],
     evenementsSante: [ev('a', 'vaccin', '2026-09-14', { nom: 'Newcastle' }), ev('a', 'traitement', '2026-10-02', { nom: 'Produit', dureeJours: 3, delaiAttenteJours: 5, note: 'confidentiel' }), { ...ev('a', 'vaccin', '2026-09-20', { nom: 'Supprimé' }), supprimeLe: 1 }],
   };
   const lotA = donnees.lots[0]!;

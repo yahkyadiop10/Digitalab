@@ -164,14 +164,53 @@ try {
   await page.getByLabel('Montant (FCFA)').fill('12000');
   await page.getByRole('button', { name: 'Enregistrer' }).click();
   await page.getByText('Résultat du mois').waitFor();
-  assert.match(await texte(), /Résultat du mois : \+ 33 000 FCFA/);
-  assert.match(await texte(), /On vous doit 45 000 FCFA/);
+  assert.match(await texte(), /Résultat du mois : \+\s33\s000\sFCFA/);
+  assert.match(await texte(), /On vous doit 45\s000\sFCFA/);
   await page.getByRole('button', { name: 'C’est encaissé' }).click();
   await page.getByRole('button', { name: 'C’est encaissé' }).waitFor({ state: 'detached' });
   assert.doesNotMatch(await texte(), /On vous doit/);
 
+  // 10. Zone de quarantaine : arrivée, fiche, note du jour, décision de fin, tableau de bord
+  etape(10);
+  await page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
+  await page.getByRole('link', { name: /Nouvelle arrivée/ }).click();
+  await page.getByLabel('Race ou variété (facultatif)').fill('Padoue');
+  await page.getByLabel('Nombre d’animaux').fill('6');
+  await page.getByLabel('Âge approximatif (facultatif)').fill('8');
+  await page.getByLabel('Vendeur ou provenance (facultatif)').fill('M. Sow');
+  await page.getByLabel('Alimentation donnée (facultatif)').fill('Aliment ponte');
+  await page.getByRole('button', { name: 'Commencer la quarantaine' }).click();
+  await page.getByText('Animaux arrivés').waitFor();
+  assert.match(await texte(), /Âge à l’arrivée \(environ\)\s*8 semaines/);
+  assert.match(await texte(), /Provenance\s*M\. Sow/);
+  assert.match(await texte(), /Quarantaine prévue\s*21 jours/);
+  await page.getByRole('button', { name: '+ Ajouter une note' }).click();
+  await page.getByLabel('Tousse ou éternue').check();
+  await page.getByLabel('Poids moyen en grammes (facultatif)').fill('1400');
+  await page.getByRole('button', { name: 'Inquiétant' }).click();
+  await page.getByRole('button', { name: 'Enregistrer la note' }).click();
+  await page.getByText(/Poids moyen : 1400 g/).waitFor();
+  await page.getByRole('link', { name: /^Alertes/ }).click();
+  await page.getByText(/Quarantaine inquiétante/).waitFor();
+  await page.getByRole('navigation').getByRole('link', { name: /Accueil/ }).click();
+  await page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
+  const tableau = await page.locator('.tb-grille').innerText();
+  assert.match(tableau, /Cheptel/);
+  assert.match(tableau, /Bâtiments et cages/);
+  assert.match(tableau, /Zone de quarantaine/);
+  assert.match(tableau, /Situation financière/);
+  assert.match(tableau, /Total des entrées/);
+  assert.match(tableau, /Padoue/);
+  await page.locator('.tb-grille').getByRole('link', { name: 'Zone de quarantaine' }).click();
+  await page.getByRole('heading', { name: 'Zone de quarantaine' }).waitFor();
+  await page.locator('a.gros', { hasText: 'Padoue' }).first().click();
+  await page.getByRole('heading', { name: 'Fin de la quarantaine' }).waitFor();
+  await page.getByRole('button', { name: 'Terminer la quarantaine' }).click();
+  await page.getByRole('button', { name: 'Confirmer' }).click();
+  await page.getByText(/Les animaux ont rejoint/).waitFor();
+
   assert.deepEqual(erreurs, []);
-  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée, finances');
+  console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée, finances, quarantaine, tableau de bord');
 } catch (e) {
   await page.screenshot({ path: new URL('./echec.png', import.meta.url).pathname }).catch(() => {});
   console.error(await texte().catch(() => ''));

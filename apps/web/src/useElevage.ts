@@ -74,11 +74,13 @@ export function useElevage(): Elevage | null {
   const mirages = useLiveQuery(() => db.mirages.toArray(), []);
   const evenementsSante = useLiveQuery(() => db.evenementsSante.toArray(), []);
   const operations = useLiveQuery(() => db.operations.toArray(), []);
+  const quarantaines = useLiveQuery(() => db.quarantaines.toArray(), []);
+  const notesQuarantaine = useLiveQuery(() => db.notesQuarantaine.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !operations || !reglagesBruts || !etats) return null;
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !operations || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
     const donnees: DonneesElevage = {
       lots: vivants(lots),
       logements: vivants(logements),
@@ -90,6 +92,8 @@ export function useElevage(): Elevage | null {
       incubations: vivants(incubations),
       mirages: vivants(mirages),
       evenementsSante: vivants(evenementsSante),
+      quarantaines: vivants(quarantaines),
+      notesQuarantaine: vivants(notesQuarantaine),
     };
     const reglages = fusionnerReglages(Object.fromEntries(reglagesBruts.map((r) => [r.cle, r.valeur])));
     const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils, protocoles: reglages.protocoles }), etats, maintenant.getTime());
@@ -97,7 +101,8 @@ export function useElevage(): Elevage | null {
       lot: (id) => donnees.lots.find((l) => l.id === id)?.nom ?? 'Lot',
       logement: (id) => donnees.logements.find((l) => l.id === id)?.nom ?? 'Local',
       incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
+      quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
     };
     return { donnees, operations: vivants(operations), reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, reglagesBruts, etats, maintenant]);
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
 }
