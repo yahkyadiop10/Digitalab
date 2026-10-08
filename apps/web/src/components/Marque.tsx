@@ -36,7 +36,7 @@ export function Embleme({ profil }: { profil: ProfilAffiche }) {
 export function Pied() {
   return (
     <footer className="pied">
-      <span><b>Digitalab</b> · éditée par <b>AYA BUSINESS</b></span>
+      <span><b>AviMaster</b> · éditée par <b>AYA BUSINESS</b></span>
     </footer>
   );
 }

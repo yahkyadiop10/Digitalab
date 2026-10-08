@@ -638,7 +638,7 @@ export function creerRepo(base: BaseElevage = db) {
       } catch {
         throw new ErreurSaisie('Ce fichier n’est pas une sauvegarde valide.');
       }
-      if (obj.application !== 'digitalab' || !obj.donnees) throw new ErreurSaisie('Ce fichier n’est pas une sauvegarde Digitalab.');
+      if (obj.application !== 'digitalab' || !obj.donnees) throw new ErreurSaisie('Ce fichier n’est pas une sauvegarde AviMaster.');
       const donnees = obj.donnees;
       await base.transaction('rw', TABLES_DONNEES.map((t) => base.table(t)), async () => {
         for (const t of TABLES_DONNEES) {
