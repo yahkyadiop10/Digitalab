@@ -1,5 +1,6 @@
 import { normaliserTelephone, TABLES_SYNCHRONISEES, tablesEcrivables, type ChangementSync, type DemandeSync, type DroitsMembre, type EnregistrementSync, type ReponseSync, type RoleMembre, type TableSynchronisee } from '@digitalab/core';
 import { db, type BaseElevage, type Connexion } from './db';
+import { URL_SERVEUR_APERCU, creerServeurDemo } from './serveur-demo';
 
 /** Le serveur a répondu par un refus (mauvais code, accès retiré, session expirée…). */
 export class ErreurServeur extends Error {
@@ -57,7 +58,9 @@ const TAILLE_LOT = 200;
 const DELAI_REQUETE_MS = 30_000;
 
 /** Adresse du serveur par défaut (variable VITE_API_URL à la construction) ; vide = à saisir. */
-export const URL_SERVEUR_DEFAUT: string = (import.meta.env?.VITE_API_URL as string | undefined) ?? '';
+/** L'aperçu en une page n'a pas de vrai serveur : il en simule un dans la page, pour pouvoir essayer les comptes et les droits. */
+export const MODE_APERCU: boolean = import.meta.env?.MODE === 'apercu';
+export const URL_SERVEUR_DEFAUT: string = MODE_APERCU ? URL_SERVEUR_APERCU : ((import.meta.env?.VITE_API_URL as string | undefined) ?? '');
 
 export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(...a)) {
   let enCours: Promise<ResultatSync> | null = null;
@@ -329,5 +332,5 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
   };
 }
 
-export const synchro = creerSynchro();
+export const synchro = creerSynchro(db, MODE_APERCU ? creerServeurDemo() : undefined);
 export type Synchro = ReturnType<typeof creerSynchro>;

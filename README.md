@@ -61,7 +61,7 @@ Dans l'application : Réglages → « Partager avec mes aides et mon vétérinai
 npm run apercu     # fabrique apps/web/dist-apercu/apercu.html, toute l'application dans un seul fichier
 ```
 
-Cette version n'a pas de service worker (donc pas de mode hors ligne) : elle sert à montrer l'application dans un visualiseur.
+Cette version n'a pas de service worker (donc pas de mode hors ligne) : elle sert à montrer l'application dans un visualiseur. Le serveur y est simulé dans la page, pour pouvoir essayer les comptes et la gestion des utilisateurs ; rien n'est gardé après un rechargement.
 
 ## Vérifications
 
@@ -71,6 +71,7 @@ npm test            # tests unitaires (noyau, données locales, serveur si TEST_
 npm run build       # construction de production
 npm run e2e         # parcours complet dans Chromium, dont rechargement hors connexion (après build)
 npm run e2e:synchro # deux appareils et un vrai serveur (après build ; TEST_DATABASE_URL requis)
+npm run e2e:apercu  # l'aperçu en une page, dans une fenêtre intégrée comme celle d'un visualiseur
 ```
 
 `npm run e2e` utilise Chromium (variable `CHROMIUM_PATH`, par défaut `/opt/pw-browsers/chromium`).

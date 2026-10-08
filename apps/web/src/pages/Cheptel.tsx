@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Si } from '../components/Si';
 import { ajouterJours, delaisEnCours, jourLocal, quarantainesEnCours, type Lot } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { libelleEvenement } from './Sante';
 import { aller } from '../route';
@@ -119,6 +119,7 @@ function Barres({ valeurs }: { valeurs: { jour: string; n: number }[] }) {
 }
 
 export function FicheLot({ elevage, lotId }: { elevage: Elevage; lotId: string }) {
+  const confirmer = useConfirmer();
   const { donnees, effectifParLot, reglages, noms, maintenant } = elevage;
   const notifier = useNotifier();
   const lot = donnees.lots.find((l) => l.id === lotId);
@@ -218,7 +219,7 @@ export function FicheLot({ elevage, lotId }: { elevage: Elevage; lotId: string }
           {evenements.map((e) => (
             <div key={e.cle} className="ligne">
               <span>{e.date.slice(5).split('-').reverse().join('/')} · {e.texte}</span>
-              <button className="lien" onClick={() => { if (window.confirm('Annuler cette ligne ? Elle restera conservée dans l’historique interne.')) void repo.annuler(e.annulation); }}>Annuler</button>
+              <button className="lien" onClick={async () => { if (await confirmer('Annuler cette ligne ? Elle restera conservée dans l’historique interne.')) void repo.annuler(e.annulation); }}>Annuler</button>
             </div>
           ))}
         </div>

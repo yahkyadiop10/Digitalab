@@ -3,7 +3,7 @@ import {
   DESCRIPTIONS_PROFILS, LIBELLES_PROFILS, MODULES, PROFILS_ASSIGNABLES, basculerModule, droitsDuProfil, etatModule, nettoyerDroits, normaliserTelephone,
   type RoleMembre,
 } from '@digitalab/core';
-import { Champ, Retour, useNotifier } from '../components/ui';
+import { Champ, Retour, useNotifier, useConfirmer } from '../components/ui';
 import { ErreurReseau, ErreurServeur, synchro, type Membre } from '../sync';
 import { aller } from '../route';
 import { peut } from '../droits';
@@ -89,6 +89,7 @@ export function FormUtilisateur({ elevage, telephone }: { elevage: Elevage; tele
 }
 
 function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage; telephone?: string }) {
+  const confirmer = useConfirmer();
   const notifier = useNotifier();
   const [existant, setExistant] = useState<Membre | null | undefined>(telephoneInitial ? undefined : null);
   const [nom, setNom] = useState('');
@@ -234,8 +235,8 @@ function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage
       {existant && (
         <div className="carte">
           <button type="button" className="lien" onClick={() => void nouveauCode()}>Donner un nouveau code de connexion</button>
-          <button type="button" className="lien" onClick={async () => { if (window.confirm('Déconnecter tous les appareils de cette personne ?')) { try { await synchro.deconnecterAppareils(existant.telephone); notifier('Appareils déconnectés'); } catch (err) { setErreur(messageErreur(err)); } } }}>Déconnecter ses appareils</button>
-          <button type="button" className="lien danger" onClick={async () => { if (window.confirm('Retirer cette personne de l’élevage ?')) { try { await synchro.retirer(existant.telephone); aller('utilisateurs'); } catch (err) { setErreur(messageErreur(err)); } } }}>Retirer de l’élevage</button>
+          <button type="button" className="lien" onClick={async () => { if (await confirmer('Déconnecter tous les appareils de cette personne ?')) { try { await synchro.deconnecterAppareils(existant.telephone); notifier('Appareils déconnectés'); } catch (err) { setErreur(messageErreur(err)); } } }}>Déconnecter ses appareils</button>
+          <button type="button" className="lien danger" onClick={async () => { if (await confirmer('Retirer cette personne de l’élevage ?')) { try { await synchro.retirer(existant.telephone); aller('utilisateurs'); } catch (err) { setErreur(messageErreur(err)); } } }}>Retirer de l’élevage</button>
         </div>
       )}
     </form>

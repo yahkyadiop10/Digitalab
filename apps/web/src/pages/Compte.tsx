@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LIBELLES_PROFILS, normaliserTelephone, tablesEcrivables } from '@digitalab/core';
-import { Champ, Retour, useNotifier } from '../components/ui';
+import { Champ, Retour, useNotifier, useConfirmer } from '../components/ui';
 import { db, type Connexion } from '../db';
 import { aller } from '../route';
-import { ErreurReseau, ErreurServeur, URL_SERVEUR_DEFAUT, synchro, type OrganisationServeur, type ResultatSync } from '../sync';
+import { ErreurReseau, ErreurServeur, MODE_APERCU, URL_SERVEUR_DEFAUT, synchro, type OrganisationServeur, type ResultatSync } from '../sync';
 
 export const useConnexion = (): Connexion | undefined | null => useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
 
@@ -43,6 +43,12 @@ export function PageCompte() {
     <>
       <Retour vers="reglages" libelle="Réglages" />
       <h2>Compte et synchronisation</h2>
+      {MODE_APERCU && (
+        <div className="bandeau n-jaune" role="note">
+          <strong>Démonstration</strong>
+          <span>Dans cet aperçu, le serveur est simulé : vous pouvez créer un compte, ajouter des utilisateurs et choisir leurs droits, mais rien n’est envoyé ni gardé après un rechargement.</span>
+        </div>
+      )}
       {connexion === undefined ? <p className="chargement">Chargement…</p> : connexion ? <Connecte connexion={connexion} /> : <FormConnexion />}
     </>
   );
@@ -165,6 +171,7 @@ function FormConnexion() {
 }
 
 function Connecte({ connexion }: { connexion: Connexion }) {
+  const confirmer = useConfirmer();
   const notifier = useNotifier();
   const [enCours, setEnCours] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -178,7 +185,7 @@ function Connecte({ connexion }: { connexion: Connexion }) {
   };
 
   const quitter = async () => {
-    if (!window.confirm('Se déconnecter de cet appareil ? Vos données restent ici, mais ne seront plus échangées avec le serveur.')) return;
+    if (!await confirmer('Se déconnecter de cet appareil ? Vos données restent ici, mais ne seront plus échangées avec le serveur.')) return;
     await synchro.deconnecter();
     notifier('Déconnecté');
   };

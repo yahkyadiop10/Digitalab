@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { LIBELLES_CATEGORIES, lignesFinance, soldesParTiers } from '@digitalab/core';
 import { Si } from '../components/Si';
-import { Champ, Retour, useNotifier } from '../components/ui';
+import { Champ, Retour, useNotifier, useConfirmer } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
@@ -31,6 +31,7 @@ export function PageCarnet({ elevage }: { elevage: Elevage }) {
 }
 
 export function FicheTiers({ elevage, id }: { elevage: Elevage; id?: string }) {
+  const confirmer = useConfirmer();
   const notifier = useNotifier();
   const existant = id ? elevage.tiers.find((t) => t.id === id) : undefined;
   const [nom, setNom] = useState(existant?.nom ?? '');
@@ -61,7 +62,7 @@ export function FicheTiers({ elevage, id }: { elevage: Elevage; id?: string }) {
         <Champ libelle="Remarque (facultatif)"><input value={note} onChange={(e) => setNote(e.target.value)} /></Champ>
         {erreur && <p className="erreur" role="alert">{erreur}</p>}
         <button className="bouton">Enregistrer</button>
-        {id && <button type="button" className="lien danger" onClick={async () => { if (window.confirm('Retirer cette fiche du carnet ? Les opérations passées restent dans vos comptes.')) { await repo.supprimerTiers(id); aller('finances/carnet'); } }}>Retirer du carnet</button>}
+        {id && <button type="button" className="lien danger" onClick={async () => { if (await confirmer('Retirer cette fiche du carnet ? Les opérations passées restent dans vos comptes.')) { await repo.supprimerTiers(id); aller('finances/carnet'); } }}>Retirer du carnet</button>}
       </form>
       {siennes.length > 0 && (
         <>

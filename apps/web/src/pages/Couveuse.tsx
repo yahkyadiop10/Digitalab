@@ -17,7 +17,7 @@ import {
   type Incubation,
   type TypeCouveuse,
 } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -259,6 +259,7 @@ export function NouvelleIncubation({ elevage }: { elevage: Elevage }) {
 /* ---------- Fiche d'une mise en incubation ---------- */
 
 export function FicheIncubation({ elevage, id }: { elevage: Elevage; id: string }) {
+  const confirmer = useConfirmer();
   const { donnees, reglages, maintenant } = elevage;
   const notifier = useNotifier();
   const [ouvert, setOuvert] = useState<string | null>(null);
@@ -373,7 +374,7 @@ export function FicheIncubation({ elevage, id }: { elevage: Elevage; id: string 
         {inc.eclosion ? (
           <button className="lien" onClick={() => agir(() => repo.annulerEclosion(inc.id), 'Éclosion annulée')}>Annuler l’éclosion</button>
         ) : (
-          <button className="lien danger" onClick={() => { if (window.confirm('Supprimer cette mise en incubation ?')) void agir(() => repo.supprimerIncubation(inc.id), 'Mise en incubation supprimée', () => aller('couveuse')); }}>Supprimer cette mise en incubation</button>
+          <button className="lien danger" onClick={async () => { if (await confirmer('Supprimer cette mise en incubation ?')) void agir(() => repo.supprimerIncubation(inc.id), 'Mise en incubation supprimée', () => aller('couveuse')); }}>Supprimer cette mise en incubation</button>
         )}
       </div>
     </>

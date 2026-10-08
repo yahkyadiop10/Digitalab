@@ -63,8 +63,8 @@ try {
   // 5. Annuler le décès depuis l'historique du lot rétablit l'effectif
   await page.getByRole('link', { name: /Cheptel/ }).click();
   await page.getByRole('link', { name: /Mes poules/ }).click();
-  page.once('dialog', (d) => d.accept());
   await page.getByText(/Décès : -3/).locator('..').getByRole('button', { name: 'Annuler' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
   await page.getByText(/Animaux\s*20/).waitFor();
 
   etape(6);
@@ -256,6 +256,21 @@ try {
   await page.getByRole('button', { name: 'Terminer la quarantaine' }).click();
   await page.getByRole('button', { name: 'Confirmer' }).click();
   await page.getByText(/Les animaux ont rejoint/).waitFor();
+
+  // 11. Dans une fenêtre intégrée qui interdit les boîtes de dialogue du navigateur (comme un aperçu), les confirmations restent utilisables
+  etape(11);
+  const neuf = await navigateur.newContext({ viewport: { width: 390, height: 800 }, serviceWorkers: 'block' });
+  const integree = await neuf.newPage();
+  integree.setDefaultTimeout(10000);
+  await integree.route(`${ADRESSE}cadre`, (r) => r.fulfill({ contentType: 'text/html', body: `<iframe id="f" sandbox="allow-scripts allow-same-origin allow-forms" src="${ADRESSE}" style="width:390px;height:800px"></iframe>` }));
+  await integree.goto(`${ADRESSE}cadre`);
+  const cadre = integree.frameLocator('#f');
+  await cadre.getByRole('button', { name: 'Passer' }).click();
+  await cadre.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
+  await cadre.getByRole('button', { name: 'Ajouter des données d’exemple' }).click();
+  await cadre.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
+  await cadre.getByText('Exemple chargé').waitFor();
+  await neuf.close();
 
   assert.deepEqual(erreurs, []);
   console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée, finances, quarantaine, tableau de bord');

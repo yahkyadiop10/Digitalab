@@ -14,7 +14,7 @@ import {
   type EtatNote,
   type Quarantaine,
 } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -161,6 +161,7 @@ export function FormArrivee({ elevage }: { elevage: Elevage }) {
 /* ---------- Fiche d'une quarantaine ---------- */
 
 export function FicheQuarantaine({ elevage, id }: { elevage: Elevage; id: string }) {
+  const confirmer = useConfirmer();
   const { donnees, reglages, maintenant, noms, effectifParLot } = elevage;
   const notifier = useNotifier();
   const [panneau, setPanneau] = useState<'note' | 'fin' | null>(null);
@@ -248,7 +249,7 @@ export function FicheQuarantaine({ elevage, id }: { elevage: Elevage; id: string
           {n.alimentation && <p>Alimentation : {n.alimentation}</p>}
           {n.poidsMoyenG !== undefined && <p>Poids moyen : {nb(n.poidsMoyenG)} g</p>}
           {n.note && <p>{n.note}</p>}
-          <div className="actions"><button className="lien" onClick={() => { if (window.confirm('Annuler cette note ?')) void repo.annuler({ table: 'notesQuarantaine', id: n.id }); }}>Annuler</button></div>
+          <div className="actions"><button className="lien" onClick={async () => { if (await confirmer('Annuler cette note ?')) void repo.annuler({ table: 'notesQuarantaine', id: n.id }); }}>Annuler</button></div>
         </article>
       ))}
 

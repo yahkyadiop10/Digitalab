@@ -26,7 +26,7 @@ import {
   type SensOperation,
 } from '@digitalab/core';
 import { Si } from '../components/Si';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { dateCourte, formatMontant, signe } from '../format';
 import { aller } from '../route';
@@ -35,6 +35,7 @@ import type { Elevage } from '../useElevage';
 const nomMois = (p: string) => new Date(`${p}-15T12:00:00`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
 export function PageFinances({ elevage }: { elevage: Elevage }) {
+  const confirmer = useConfirmer();
   const { donnees, operations, paiements, noms, maintenant } = elevage;
   const notifier = useNotifier();
   const auj = jourLocal(maintenant);
@@ -168,7 +169,7 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
                 {l.reste > 0 && <><br /><small className="muet">reste {formatMontant(l.reste)} à {l.sens === 'recette' ? 'encaisser' : 'payer'}</small></>}
               </span>
               <b className={l.sens === 'recette' ? 'montant gain' : 'montant'}>{l.sens === 'recette' ? '+' : '−'} {formatMontant(l.montant)}</b>
-              {!l.automatique && aDroit(droits, l.sens === 'recette' ? 'finances.annuler_vente' : 'finances.annuler_depense') && <button className="lien" onClick={() => { if (window.confirm('Annuler cette ligne ?')) void repo.annuler({ table: 'operations', id: l.cle }); }}>Annuler</button>}
+              {!l.automatique && aDroit(droits, l.sens === 'recette' ? 'finances.annuler_vente' : 'finances.annuler_depense') && <button className="lien" onClick={async () => { if (await confirmer('Annuler cette ligne ?')) void repo.annuler({ table: 'operations', id: l.cle }); }}>Annuler</button>}
             </div>
           ))}
         </div>

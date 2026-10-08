@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { CATEGORIES_PAIE, LIBELLES_MODES, MODES_PAIEMENT, jourLocal, moisDecale, suiviSalaires, type ModePaiement, type NatureSalaire, type OperationFinanciere } from '@digitalab/core';
 import { Si } from '../components/Si';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { ErreurSaisie, repo } from '../repo';
 import { profilDe } from '../droits';
@@ -65,6 +65,7 @@ export function PageSalaires({ elevage, moisInitial }: { elevage: Elevage; moisI
 }
 
 export function FormEmploye({ elevage, id }: { elevage: Elevage; id?: string }) {
+  const confirmer = useConfirmer();
   const notifier = useNotifier();
   const existant = id ? elevage.employes.find((e) => e.id === id) : undefined;
   const [nom, setNom] = useState(existant?.nom ?? '');
@@ -100,7 +101,7 @@ export function FormEmploye({ elevage, id }: { elevage: Elevage; id?: string }) 
       {erreur && <p className="erreur" role="alert">{erreur}</p>}
       <button className="bouton">Enregistrer</button>
       {id && (
-        <button type="button" className="lien danger" onClick={async () => { if (window.confirm('Retirer cet employé de la liste ? Ses paies passées restent dans vos comptes.')) { await repo.supprimerEmploye(id); aller('finances/salaires'); } }}>
+        <button type="button" className="lien danger" onClick={async () => { if (await confirmer('Retirer cet employé de la liste ? Ses paies passées restent dans vos comptes.')) { await repo.supprimerEmploye(id); aller('finances/salaires'); } }}>
           Retirer de la liste
         </button>
       )}

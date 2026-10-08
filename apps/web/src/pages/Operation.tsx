@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { LIBELLES_CATEGORIES, LIBELLES_MODES, MODES_PAIEMENT, aDroit, jourLocal, normaliserTelephone, peutValiderDepense, reglement, totalLignes, type ModePaiement, type OperationFinanciere, type Paiement } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { profilDe } from '../droits';
 import { ErreurSaisie, repo } from '../repo';
@@ -46,6 +46,7 @@ function Introuvable({ vers }: { vers: string }) {
 }
 
 export function PageOperation({ elevage, id }: { elevage: Elevage; id: string }) {
+  const confirmer = useConfirmer();
   const notifier = useNotifier();
   const trouve = trouver(elevage, id);
   const [montant, setMontant] = useState('');
@@ -89,7 +90,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
           {peutValiderOp && (
             <span className="rangee">
               <button className="bouton court" onClick={async () => { await repo.valider({ table: 'operations', id: op.id }); notifier('Dépense validée ✓'); }}>Valider</button>
-              <button className="bouton alt court" onClick={async () => { if (window.confirm('Refuser cette dépense ? Elle sera annulée.')) { await repo.annuler({ table: 'operations', id: op.id }); aller('finances'); } }}>Refuser</button>
+              <button className="bouton alt court" onClick={async () => { if (await confirmer('Refuser cette dépense ? Elle sera annulée.')) { await repo.annuler({ table: 'operations', id: op.id }); aller('finances'); } }}>Refuser</button>
             </span>
           )}
         </div>
@@ -125,7 +126,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
               {p.statut === 'a_valider' && peutValiderPaiement && <> · <button className="lien" onClick={async () => { await repo.valider({ table: 'paiements', id: p.id }); notifier('Paiement validé ✓'); }}>Valider</button></>}
             </span>
             <b className="montant">{formatMontant(p.montant)}</b>
-            {peutAnnulerOp && <button className="lien" onClick={() => { if (window.confirm('Annuler ce règlement ?')) void repo.annuler({ table: 'paiements', id: p.id }); }}>Annuler</button>}
+            {peutAnnulerOp && <button className="lien" onClick={async () => { if (await confirmer('Annuler ce règlement ?')) void repo.annuler({ table: 'paiements', id: p.id }); }}>Annuler</button>}
           </div>
         ))}
         {ancienReglement && <p className="muet">Réglé en totalité (saisie sans détail du moyen de paiement).</p>}
@@ -152,7 +153,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
         {peutAnnulerOp && <button
           className="lien danger"
           onClick={async () => {
-            if (!window.confirm('Annuler cette opération et ses règlements ? Elle ne comptera plus dans vos chiffres.')) return;
+            if (!await confirmer('Annuler cette opération et ses règlements ? Elle ne comptera plus dans vos chiffres.')) return;
             await repo.annuler({ table: 'operations', id: op.id });
             notifier('Opération annulée', { annuler: () => repo.restaurerOperation(op.id) });
             aller('finances');

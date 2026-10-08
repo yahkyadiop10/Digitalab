@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { SEUILS_PAR_DEFAUT, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
-import { Champ, useNotifier, versNombre } from '../components/ui';
+import { Champ, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { chargerDemo } from '../demo';
 import { peut, profilDe } from '../droits';
 import { redimensionnerLogo } from '../logo';
@@ -15,9 +15,9 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
     <>
       <h2>Compte et équipe</h2>
       <CarteCompte />
-      {peut(elevage, 'admin.utilisateurs') && elevage.moi.relie && (
+      {peut(elevage, 'admin.utilisateurs') && (
         <a className="carte ligne" href="#/utilisateurs" style={{ textDecoration: 'none', color: 'inherit' }}>
-          <span>Gestion des utilisateurs<br /><small className="muet">Ajouter des personnes, choisir ce que chacune voit et fait</small></span>
+          <span>Gestion des utilisateurs<br /><small className="muet">{elevage.moi.relie ? 'Ajouter des personnes, choisir ce que chacune voit et fait' : 'Ajouter des personnes et choisir ce que chacune voit et fait (demande un compte relié)'}</small></span>
           <b aria-hidden="true">›</b>
         </a>
       )}
@@ -229,6 +229,7 @@ function Seuil({ libelle, valeur, onSave }: { libelle: string; valeur: number; o
 }
 
 function Donnees() {
+  const confirmer = useConfirmer();
   const notifier = useNotifier();
   const sauvegarder = async () => {
     const blob = new Blob([await repo.exporter()], { type: 'application/json' });
@@ -243,7 +244,7 @@ function Donnees() {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
-    if (!window.confirm('Remplacer toutes les données actuelles par cette sauvegarde ? Si un compte est relié, les fiches plus récentes du serveur reviendront à la prochaine synchronisation.')) return;
+    if (!await confirmer('Remplacer toutes les données actuelles par cette sauvegarde ? Si un compte est relié, les fiches plus récentes du serveur reviendront à la prochaine synchronisation.')) return;
     try {
       await repo.importer(await f.text());
       notifier('Sauvegarde restaurée ✓');
@@ -259,8 +260,8 @@ function Donnees() {
         <input type="file" accept="application/json,.json" hidden onChange={restaurer} />
       </label>
       <div className="actions">
-        <button className="lien" onClick={async () => { if (window.confirm('Ajouter des données d’exemple à votre élevage ?')) { await chargerDemo(); notifier('Exemple chargé'); } }}>Ajouter des données d’exemple</button>
-        <button className="lien danger" onClick={async () => { if (window.confirm('Effacer toutes les données de cet appareil ? Si un compte est relié, elles reviendront depuis le serveur à la prochaine synchronisation.')) { await repo.toutEffacer(); notifier('Données effacées'); } }}>Tout effacer</button>
+        <button className="lien" onClick={async () => { if (await confirmer('Ajouter des données d’exemple à votre élevage ?')) { await chargerDemo(); notifier('Exemple chargé'); } }}>Ajouter des données d’exemple</button>
+        <button className="lien danger" onClick={async () => { if (await confirmer('Effacer toutes les données de cet appareil ? Si un compte est relié, elles reviendront depuis le serveur à la prochaine synchronisation.')) { await repo.toutEffacer(); notifier('Données effacées'); } }}>Tout effacer</button>
       </div>
     </div>
   );

@@ -16,7 +16,7 @@ import {
   type ProtocoleVaccin,
   type ResultatTraitement,
 } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { ErreurSaisie, nouvelId, repo, type Annulation } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -405,6 +405,7 @@ function libelleEvenement(e: EvenementSante): string {
 }
 
 export function PageHistorique({ elevage }: { elevage: Elevage }) {
+  const confirmer = useConfirmer();
   const { donnees, noms } = elevage;
   const evenements = [...donnees.evenementsSante].sort((a, b) => b.date.localeCompare(a.date));
   return (
@@ -417,7 +418,7 @@ export function PageHistorique({ elevage }: { elevage: Elevage }) {
           {evenements.map((e) => (
             <div key={e.id} className="ligne">
               <span>{ICONES[e.type]} {dateCourte(e.date)} · {noms.lot(e.lotId)} · {libelleEvenement(e)}</span>
-              <button className="lien" onClick={() => { if (window.confirm('Annuler cette ligne ? Elle reste conservée dans l’historique interne.')) void repo.annuler({ table: 'evenementsSante', id: e.id }); }}>Annuler</button>
+              <button className="lien" onClick={async () => { if (await confirmer('Annuler cette ligne ? Elle reste conservée dans l’historique interne.')) void repo.annuler({ table: 'evenementsSante', id: e.id }); }}>Annuler</button>
             </div>
           ))}
         </div>

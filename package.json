@@ -15,7 +15,8 @@
     "typecheck": "npm run typecheck -w @digitalab/core && npm run typecheck -w @digitalab/web && npm run typecheck -w @digitalab/api",
     "e2e": "node apps/web/e2e/offline.mjs",
     "e2e:synchro": "node apps/web/e2e/sync.mjs",
-    "api": "npm run start -w @digitalab/api"
+    "api": "npm run start -w @digitalab/api",
+    "e2e:apercu": "npm run apercu -w @digitalab/web && node apps/web/e2e/apercu.mjs"
   },
   "engines": {
     "node": ">=20"

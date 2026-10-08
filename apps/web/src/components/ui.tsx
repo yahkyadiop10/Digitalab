@@ -15,6 +15,13 @@ interface Notif {
 const ContexteNotif = createContext<(message: string, opts?: { annuler?: () => Promise<void>; erreur?: boolean }) => void>(() => {});
 export const useNotifier = () => useContext(ContexteNotif);
 
+/**
+ * Demande de confirmation dans l'application. `window.confirm` ne convient pas : il est bloqué dans les fenêtres intégrées
+ * (aperçus, certains navigateurs d'applications) et le bouton semblerait alors ne rien faire.
+ */
+const ContexteConfirmation = createContext<(message: string) => Promise<boolean>>(() => Promise.resolve(false));
+export const useConfirmer = () => useContext(ContexteConfirmation);
+
 export function FournisseurNotif({ children }: { children: ReactNode }) {
   const [notif, setNotif] = useState<Notif | null>(null);
   const minuterie = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -23,9 +30,27 @@ export function FournisseurNotif({ children }: { children: ReactNode }) {
     setNotif({ message, ...opts });
     minuterie.current = setTimeout(() => setNotif(null), opts.annuler ? 8000 : 4000);
   }, []);
+  const [question, setQuestion] = useState<{ message: string; repondre: (oui: boolean) => void } | null>(null);
+  const confirmer = useCallback((message: string) => new Promise<boolean>((resolve) => setQuestion({ message, repondre: resolve })), []);
+  const repondre = (oui: boolean) => {
+    question?.repondre(oui);
+    setQuestion(null);
+  };
   return (
     <ContexteNotif.Provider value={notifier}>
+     <ContexteConfirmation.Provider value={confirmer}>
       {children}
+      {question && (
+        <div className="voile" role="presentation">
+          <div className="dialogue" role="alertdialog" aria-modal="true" aria-label="Confirmation">
+            <p>{question.message}</p>
+            <div className="rangee">
+              <button className="bouton court" autoFocus onClick={() => repondre(true)}>Oui</button>
+              <button className="bouton alt court" onClick={() => repondre(false)}>Non</button>
+            </div>
+          </div>
+        </div>
+      )}
       {notif && (
         <div className={`toast${notif.erreur ? ' toast-erreur' : ''}`} role="status" aria-live="polite">
           <span>{notif.message}</span>
@@ -41,6 +66,7 @@ export function FournisseurNotif({ children }: { children: ReactNode }) {
           )}
         </div>
       )}
+     </ContexteConfirmation.Provider>
     </ContexteNotif.Provider>
   );
 }
