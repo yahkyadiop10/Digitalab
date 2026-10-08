@@ -190,7 +190,7 @@ export function PageBulletin({ elevage, employeId, periode }: { elevage: Elevage
           </tfoot>
         </table>
         <div className="signatures"><span>Signature de l’employeur</span><span>Signature de l’employé</span></div>
-        <p className="doc-pied">Récapitulatif de gestion établi avec Digitalab. Il ne remplace pas un bulletin de paie réglementaire (cotisations sociales, impôts).</p>
+        <p className="doc-pied">Récapitulatif de gestion établi avec AviMaster. Il ne remplace pas un bulletin de paie réglementaire (cotisations sociales, impôts).</p>
       </article>
     </>
   );

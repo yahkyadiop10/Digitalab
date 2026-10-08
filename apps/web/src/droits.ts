@@ -12,7 +12,15 @@ export const aLeModule = (elevage: Pick<Elevage, 'moi'>, module: string): boolea
 export const tousLesDroits = (): string[] => [...TOUTES_LES_FONCTIONS];
 
 /** Nom, coordonnées et logo à imprimer : la fiche partagée de l'élevage, sinon ce qui avait été saisi sur cet appareil. */
-export function profilDe(elevage: Pick<Elevage, 'profil' | 'reglages'>): { nom: string; adresse: string; telephone: string; ninea: string; logo?: string } {
+export interface ProfilAffiche {
+  nom: string;
+  adresse: string;
+  telephone: string;
+  ninea: string;
+  logo?: string;
+}
+
+export function profilDe(elevage: Pick<Elevage, 'profil' | 'reglages'>): ProfilAffiche {
   const p = elevage.profil;
   const r = elevage.reglages;
   return {

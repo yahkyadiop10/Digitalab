@@ -1,3 +1,4 @@
+import { LogoProduit, Pied } from '../components/Marque';
 import { useMemo, useState } from 'react';
 import { RUBRIQUES_FICHE, construireFiche, decoderFiche, encoderFiche, jourLocal, type FicheSuivi, type RubriqueFiche } from '@digitalab/core';
 import { Retour, useNotifier } from '../components/ui';
@@ -60,8 +61,10 @@ export function PageFichePublique({ jeton }: { jeton: string }) {
   const fiche = useMemo(() => decoderFiche(jeton), [jeton]);
   return (
     <main className="public">
-      <header className="public-entete"><h1>Digitalab</h1><small>Fiche de suivi d’un élevage</small></header>
+      <div className="bandeau-marque"><LogoProduit /></div>
+      <header className="public-entete"><h1>Fiche de suivi d’un élevage</h1></header>
       {fiche ? <FicheVue fiche={fiche} /> : <div className="carte"><h2>Lien illisible</h2><p>Ce lien n’est pas une fiche de suivi valide. Demandez au vendeur de vous le renvoyer.</p></div>}
+      <Pied />
     </main>
   );
 }

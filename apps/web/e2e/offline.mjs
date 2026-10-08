@@ -22,7 +22,7 @@ try {
   etape(1);
   // 1. Démarrage : 20 poules dans un poulailler de 10 m² (5 m² nécessaires)
   await page.goto(ADRESSE);
-  await page.getByText('Bienvenue sur Digitalab').waitFor();
+  await page.getByText('Bienvenue sur AviMaster').waitFor();
   await page.getByLabel('Nom de votre élevage (facultatif)').fill('Ferme test');
   await page.getByLabel('Combien de poules ?').fill('20');
   await page.getByLabel('Surface du poulailler en m² (facultatif)').fill('10');

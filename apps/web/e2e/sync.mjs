@@ -70,7 +70,7 @@ const v = await appareil('veterinaire');
 try {
   console.log('→ 1 propriétaire : démarrage et compte');
   await a.page.goto(`http://localhost:${PORT_WEB}/`);
-  await a.page.getByText('Bienvenue sur Digitalab').waitFor();
+  await a.page.getByText('Bienvenue sur AviMaster').waitFor();
   await a.page.getByLabel('Nom de votre élevage (facultatif)').fill('Ferme sync');
   await a.page.getByLabel('Combien de poules ?').fill('20');
   await a.page.getByRole('button', { name: 'Commencer' }).click();
@@ -106,7 +106,7 @@ try {
 
   console.log('→ 3 vétérinaire : se connecte avec le code donné, sans SMS, sur un autre téléphone');
   await v.page.goto(`http://localhost:${PORT_WEB}/`);
-  await v.page.getByText('Bienvenue sur Digitalab').waitFor();
+  await v.page.getByText('Bienvenue sur AviMaster').waitFor();
   await v.page.getByRole('link', { name: /J’ai déjà un compte/ }).click();
   await v.page.getByLabel('Votre numéro de téléphone').fill('77 000 00 02');
   await v.page.getByLabel('Adresse du serveur').fill(URL_API);

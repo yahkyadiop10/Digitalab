@@ -1,3 +1,4 @@
+import { LogoProduit, Pied } from '../components/Marque';
 import { useState, type FormEvent } from 'react';
 import { Champ, Nombre, versNombre } from '../components/ui';
 import { chargerDemo } from '../demo';
@@ -33,8 +34,10 @@ export function Demarrage() {
   };
 
   return (
+    <>
+    <div className="bandeau-marque"><LogoProduit /></div>
     <main className="demarrage">
-      <h1>Bienvenue sur Digitalab</h1>
+      <h1>Bienvenue sur AviMaster</h1>
       <p className="muet">Quelques questions pour préparer votre élevage. Vous pourrez tout modifier plus tard.</p>
       <form onSubmit={creer}>
         <Champ libelle="Nom de votre élevage (facultatif)"><input value={nom} onChange={(e) => setNom(e.target.value)} /></Champ>
@@ -63,6 +66,8 @@ export function Demarrage() {
         <button className="lien" onClick={() => void repo.ecrireReglage('demarrageFait', true)}>Passer</button>
         <a className="lien" href="#/compte">J’ai déjà un compte : retrouver mon élevage</a>
       </div>
+      <Pied />
     </main>
+    </>
   );
 }

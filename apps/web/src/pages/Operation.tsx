@@ -211,7 +211,7 @@ export function PageFacture({ elevage, id }: { elevage: Elevage; id: string }) {
           </tfoot>
         </table>
         {op.note && <p>{op.note}</p>}
-        <p className="doc-pied">Document de gestion établi avec Digitalab. Il ne remplace pas une facture normalisée lorsque celle-ci est exigée.</p>
+        <p className="doc-pied">Document de gestion établi avec AviMaster. Il ne remplace pas une facture normalisée lorsque celle-ci est exigée.</p>
       </article>
     </>
   );
@@ -255,7 +255,7 @@ export function PageRecu({ elevage, id }: { elevage: Elevage; id: string }) {
           </tbody>
         </table>
         <div className="signatures"><span>Signature de celui qui {recette ? 'reçoit' : 'paie'}</span><span>Signature de l’autre partie</span></div>
-        <p className="doc-pied">Reçu établi avec Digitalab.</p>
+        <p className="doc-pied">Reçu établi avec AviMaster.</p>
       </article>
     </>
   );

@@ -47,7 +47,7 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
       )}
       <h2>À propos</h2>
       <div className="carte muet">
-        Digitalab, version de travail (phase 1). Vos données restent sur cet appareil (et sur le serveur si vous avez relié un compte) ; faites régulièrement une sauvegarde. L’application fonctionne sans connexion une fois chargée.
+        AviMaster, version de travail. Vos données restent sur cet appareil (et sur le serveur si vous avez relié un compte) ; faites régulièrement une sauvegarde. L’application fonctionne sans connexion une fois chargée.
       </div>
     </>
   );

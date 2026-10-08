@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { jourLocal } from '@digitalab/core';
+import { Embleme, LogoProduit, Pied } from './components/Marque';
 import { Navigation, FournisseurNotif, OutilsEntete } from './components/ui';
 import { db } from './db';
 import { Accueil } from './pages/Accueil';
@@ -119,21 +120,25 @@ function Application() {
   }
   if (!elevage) return <p className="chargement">Chargement…</p>;
   if (!elevage.reglages.demarrageFait && elevage.donnees.lots.length === 0) {
-    if (route.segments[0] === 'compte') return <FournisseurNotif><main><PageCompte /></main></FournisseurNotif>;
+    if (route.segments[0] === 'compte') return <FournisseurNotif><div className="bandeau-marque"><LogoProduit /></div><main><PageCompte /><Pied /></main></FournisseurNotif>;
     return <FournisseurNotif><Demarrage /></FournisseurNotif>;
   }
   const profil = profilDe(elevage);
   const nbAlertes = elevage.alertes.filter((a) => !a.priseEnCharge).length;
   return (
     <FournisseurNotif>
-      <header>
-        {profil.logo ? <img className="logo-entete" src={profil.logo} alt="" /> : null}
-        <h1>Digitalab</h1>
-        <small>{profil.nom}</small>
+      <div className="bandeau-marque"><LogoProduit /></div>
+      <header className="entete-ferme">
+        <Embleme profil={profil} />
+        <div className="ferme-nom">
+          <h1>{profil.nom}</h1>
+          {elevage.moi.fonction && <small>{elevage.moi.fonction}</small>}
+        </div>
         <OutilsEntete nbAlertes={nbAlertes} finances={aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires')} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
       </header>
       <main>
         <Page elevage={elevage} />
+        <Pied />
       </main>
       <Navigation elevage={elevage} />
     </FournisseurNotif>
