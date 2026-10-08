@@ -128,7 +128,7 @@ describe('tableau de bord', () => {
     expect(t.incubation).toEqual({ misesEnCours: 1, oeufsEnCours: 45, prochaineEclosion: { date: '2026-10-21', nom: 'Série 1' } });
   });
   it('résume les finances et la santé', () => {
-    expect(t.finances).toEqual({ recettesTotal: 30000, depensesTotal: 12000, resultatTotal: 18000, recettesMois: 30000, depensesMois: 0, resultatMois: 30000, aEncaisser: 0, aPayer: 12000 });
+    expect(t.finances).toEqual({ recettesTotal: 30000, depensesTotal: 12000, resultatTotal: 18000, recettesMois: 30000, depensesMois: 0, resultatMois: 30000, aEncaisser: 0, aPayer: 12000, enRetard: 0, salairesAPayer: 0 });
     expect(t.sante).toEqual({ vaccinsAFaire: 0, traitementsEnCours: 1, delaisAttente: 1 });
   });
 });

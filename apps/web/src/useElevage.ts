@@ -7,7 +7,10 @@ import {
   type Alerte,
   type DonneesElevage,
   type Niveau,
+  type Employe,
   type OperationFinanciere,
+  type Paiement,
+  type Tiers,
 } from '@digitalab/core';
 import { db, type EtatAlerte } from './db';
 import { fusionnerReglages, type Reglages } from './reglages';
@@ -25,6 +28,10 @@ export interface Elevage {
   donnees: DonneesElevage;
   /** Dépenses et recettes saisies (hors achats d'aliment du stock). */
   operations: OperationFinanciere[];
+  /** Règlements enregistrés (acomptes, soldes), clients et fournisseurs, employés. */
+  paiements: Paiement[];
+  tiers: Tiers[];
+  employes: Employe[];
   reglages: Reglages;
   effectifParLot: Map<string, number>;
   alertes: AlerteEtat[];
@@ -74,13 +81,16 @@ export function useElevage(): Elevage | null {
   const mirages = useLiveQuery(() => db.mirages.toArray(), []);
   const evenementsSante = useLiveQuery(() => db.evenementsSante.toArray(), []);
   const operations = useLiveQuery(() => db.operations.toArray(), []);
+  const paiements = useLiveQuery(() => db.paiements.toArray(), []);
+  const tiers = useLiveQuery(() => db.tiers.toArray(), []);
+  const employes = useLiveQuery(() => db.employes.toArray(), []);
   const quarantaines = useLiveQuery(() => db.quarantaines.toArray(), []);
   const notesQuarantaine = useLiveQuery(() => db.notesQuarantaine.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !operations || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !operations || !paiements || !tiers || !employes || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
     const donnees: DonneesElevage = {
       lots: vivants(lots),
       logements: vivants(logements),
@@ -103,6 +113,6 @@ export function useElevage(): Elevage | null {
       incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
       quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
     };
-    return { donnees, operations: vivants(operations), reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
+    return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
 }

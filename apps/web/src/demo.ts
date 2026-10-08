@@ -72,6 +72,15 @@ export async function chargerDemo(): Promise<void> {
     { id: nouvelId(), ...bruit, date: j(5), sens: 'depense', categorie: 'soins', montant: 6500, paye: true, payeLe: j(5), lotId: soie },
     { id: nouvelId(), ...bruit, date: j(2), sens: 'depense', categorie: 'materiel', montant: 12000, paye: false, tiers: 'Quincaillerie' },
   ]);
+  // Finances détaillées : salariés, une avance, une facture avec acompte, une dépense réglée en deux fois.
+  const moussa = await repo.enregistrerEmploye({ nom: 'Moussa Ndiaye', poste: 'Soigneur', salaire: 45000, telephone: '77 100 20 30' });
+  await repo.enregistrerEmploye({ nom: 'Awa Fall', poste: 'Aide', salaire: 35000 });
+  await repo.payerSalaire({ employeId: moussa, periode: auj.slice(0, 7), montant: 15000, nature: 'avance', mode: 'wave' });
+  await repo.ajouterOperation({
+    sens: 'recette', categorie: 'oeufs', date: j(2), tiers: 'Boutique Awa', telephoneTiers: '77 111 22 33', paye: false, acompte: 40000, mode: 'wave', echeance: ajouterJours(auj, 5),
+    lignes: [{ libelle: 'Plateaux d’œufs (30 œufs)', quantite: 30, prixUnitaire: 2500 }, { libelle: 'Poulets de chair', quantite: 2, prixUnitaire: 3000 }],
+  });
+  await repo.ajouterOperation({ sens: 'depense', categorie: 'transport', date: j(4), tiers: 'Transporteur Sow', montant: 9000, paye: false, acompte: 4000, mode: 'especes', echeance: j(1) });
   await repo.ecrireReglage('nomElevage', 'Ferme de démonstration');
   await repo.ecrireReglage('demarrageFait', true);
 }

@@ -1,4 +1,4 @@
-import { effectifs, jourLocal, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { effectifs, jourLocal, MODES_PAIEMENT, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -15,7 +15,7 @@ let dernierInstant = 0;
 const maintenant = () => (dernierInstant = Math.max(Date.now(), dernierInstant + 1));
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
-export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations' | 'notesQuarantaine';
+export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations' | 'notesQuarantaine' | 'paiements';
 
 /** Référence d'un enregistrement créé, pour pouvoir l'annuler juste après. */
 export interface Annulation {
@@ -316,25 +316,153 @@ export function creerRepo(base: BaseElevage = db) {
 
         /* ---------- Finances ---------- */
 
-    async ajouterOperation(d: { sens: SensOperation; categorie: string; montant: number; date?: Jour; lotId?: string | null; tiers?: string; paye?: boolean; note?: string }): Promise<Annulation> {
-      if (!Number.isInteger(d.montant) || d.montant <= 0) throw new ErreurSaisie('Montant : entrez un nombre entier de FCFA supérieur à zéro.');
+    /**
+     * Note une dépense ou une recette. Avec des `lignes`, le montant est calculé (lignes moins remise) et une vente reçoit un numéro de facture.
+     * Règlement : `paye` (par défaut vrai) = tout réglé maintenant ; sinon `acompte` = une partie maintenant, le reste plus tard.
+     */
+    async ajouterOperation(d: {
+      sens: SensOperation; categorie: string; montant?: number; date?: Jour; lotId?: string | null; tiers?: string; telephoneTiers?: string; paye?: boolean; note?: string;
+      lignes?: LigneDocument[]; remise?: number; numero?: string; echeance?: Jour; acompte?: number; mode?: ModePaiement;
+      employeId?: string; periode?: string; nature?: NatureSalaire;
+    }): Promise<Annulation> {
+      const lignes = (d.lignes ?? []).filter((l) => l.libelle.trim() || l.quantite || l.prixUnitaire);
+      for (const l of lignes) {
+        if (!l.libelle.trim()) throw new ErreurSaisie('Chaque ligne de la facture doit avoir un nom (ex. « Plateaux d’œufs »).');
+        if (!Number.isFinite(l.quantite) || l.quantite <= 0) throw new ErreurSaisie(`« ${l.libelle.trim()} » : la quantité doit être supérieure à zéro.`);
+        if (!Number.isInteger(l.prixUnitaire) || l.prixUnitaire < 0) throw new ErreurSaisie(`« ${l.libelle.trim()} » : le prix doit être un nombre entier de FCFA.`);
+      }
+      const remise = d.remise ?? 0;
+      if (!Number.isInteger(remise) || remise < 0) throw new ErreurSaisie('Remise : entrez un nombre entier de FCFA, zéro ou plus.');
+      const montant = lignes.length > 0 ? totalLignes(lignes, remise) : d.montant ?? 0;
+      if (!Number.isInteger(montant) || montant <= 0) throw new ErreurSaisie('Montant : entrez un nombre entier de FCFA supérieur à zéro.');
       const date = d.date ?? aujourdhui();
       if (date > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
+      if (d.echeance && d.echeance < date) throw new ErreurSaisie('La date limite de paiement ne peut pas précéder la date de l’opération.');
       const paye = d.paye ?? true;
+      const mode = d.mode ?? 'especes';
+      if (!MODES_PAIEMENT.includes(mode)) throw new ErreurSaisie('Moyen de paiement inconnu.');
+      const acompte = paye ? montant : d.acompte ?? 0;
+      if (!Number.isInteger(acompte) || acompte < 0 || acompte > montant) throw new ErreurSaisie('Acompte : entrez un nombre entier de FCFA, sans dépasser le total.');
+
       const id = nouvelId();
-      await base.operations.add({
-        id, misAJour: maintenant(), date, sens: d.sens, categorie: d.categorie, montant: d.montant, paye,
-        ...(paye ? { payeLe: date } : {}),
-        ...(d.lotId ? { lotId: d.lotId } : {}),
-        ...(d.tiers?.trim() ? { tiers: d.tiers.trim() } : {}),
-        ...(d.note?.trim() ? { note: d.note.trim() } : {}),
+      await base.transaction('rw', base.operations, base.paiements, base.tiers, async () => {
+        const nomTiers = d.tiers?.trim();
+        let tiersId: string | undefined;
+        if (nomTiers) {
+          const connu = (await base.tiers.toArray()).find((t) => !t.supprimeLe && t.nom.toLowerCase() === nomTiers.toLowerCase());
+          if (connu) {
+            tiersId = connu.id;
+            if (d.telephoneTiers?.trim() && !connu.telephone) await base.tiers.update(connu.id, { telephone: d.telephoneTiers.trim(), misAJour: maintenant() });
+          } else {
+            tiersId = nouvelId();
+            await base.tiers.add({ id: tiersId, misAJour: maintenant(), nom: nomTiers, ...(d.telephoneTiers?.trim() ? { telephone: d.telephoneTiers.trim() } : {}) });
+          }
+        }
+        const numero = d.numero?.trim() || (d.sens === 'recette' && lignes.length > 0 ? prochainNumeroFacture(await base.operations.toArray(), Number(date.slice(0, 4))) : undefined);
+        await base.operations.add({
+          id, misAJour: maintenant(), date, sens: d.sens, categorie: d.categorie, montant, paye: false,
+          ...(d.lotId ? { lotId: d.lotId } : {}),
+          ...(nomTiers ? { tiers: nomTiers } : {}),
+          ...(tiersId ? { tiersId } : {}),
+          ...(d.note?.trim() ? { note: d.note.trim() } : {}),
+          ...(numero ? { numero } : {}),
+          ...(lignes.length > 0 ? { lignes: lignes.map((l) => ({ libelle: l.libelle.trim(), quantite: l.quantite, prixUnitaire: l.prixUnitaire })) } : {}),
+          ...(lignes.length > 0 && remise > 0 ? { remise } : {}),
+          ...(d.echeance && acompte < montant ? { echeance: d.echeance } : {}),
+          ...(d.employeId ? { employeId: d.employeId } : {}),
+          ...(d.periode ? { periode: d.periode } : {}),
+          ...(d.nature ? { nature: d.nature } : {}),
+        });
+        if (acompte > 0) await base.paiements.add({ id: nouvelId(), misAJour: maintenant(), operationId: id, date, montant: acompte, mode });
       });
       return { table: 'operations', id };
     },
 
-    /** Marque une dépense comme payée ou une recette comme encaissée. */
-    async marquerPaye(id: string, paye: boolean): Promise<void> {
-      await base.operations.update(id, { paye, payeLe: paye ? aujourdhui() : undefined, misAJour: maintenant() });
+    /** Enregistre un règlement (acompte ou solde) sur une facture ou une dépense. */
+    async ajouterPaiement(operationId: string, montant: number, mode: ModePaiement, date?: Jour): Promise<Annulation> {
+      const op = await base.operations.get(operationId);
+      if (!op || op.supprimeLe) throw new ErreurSaisie('Opération introuvable.');
+      if (!Number.isInteger(montant) || montant <= 0) throw new ErreurSaisie('Montant : entrez un nombre entier de FCFA supérieur à zéro.');
+      if (!MODES_PAIEMENT.includes(mode)) throw new ErreurSaisie('Moyen de paiement inconnu.');
+      const jour = date ?? aujourdhui();
+      if (jour > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
+      const { reste } = reglement(op, await base.paiements.where('operationId').equals(operationId).toArray());
+      if (montant > reste) throw new ErreurSaisie(reste === 0 ? 'Cette opération est déjà entièrement réglée.' : `Il ne reste que ${reste} FCFA à régler.`);
+      const id = nouvelId();
+      await base.paiements.add({ id, misAJour: maintenant(), operationId, date: jour, montant, mode });
+      return { table: 'paiements', id };
+    },
+
+    /** Règle d'un coup tout ce qui reste sur une opération. */
+    async marquerPaye(id: string, mode: ModePaiement = 'autre'): Promise<void> {
+      const op = await base.operations.get(id);
+      if (!op) throw new ErreurSaisie('Opération introuvable.');
+      const { reste } = reglement(op, await base.paiements.where('operationId').equals(id).toArray());
+      if (reste > 0) await this.ajouterPaiement(id, reste, mode);
+    },
+
+    /* ---------- Clients, fournisseurs, employés et paie ---------- */
+
+    async enregistrerTiers(d: { id?: string; nom: string; telephone?: string; note?: string }): Promise<string> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom.');
+      const homonyme = (await base.tiers.toArray()).find((t) => !t.supprimeLe && t.id !== d.id && t.nom.toLowerCase() === nom.toLowerCase());
+      if (homonyme) throw new ErreurSaisie(`« ${homonyme.nom} » existe déjà dans votre carnet.`);
+      const fiche: Omit<Tiers, 'id' | 'misAJour'> = { nom, ...(d.telephone?.trim() ? { telephone: d.telephone.trim() } : {}), ...(d.note?.trim() ? { note: d.note.trim() } : {}) };
+      if (d.id) {
+        const avant = await base.tiers.get(d.id);
+        if (!avant) throw new ErreurSaisie('Fiche introuvable.');
+        await base.tiers.put({ id: d.id, misAJour: maintenant(), ...fiche });
+        // Les anciennes opérations gardent le nom écrit à l'époque ; on les met à jour pour rester cohérent.
+        if (avant.nom !== nom) {
+          for (const o of await base.operations.filter((o) => o.tiersId === d.id).toArray()) await base.operations.update(o.id, { tiers: nom, misAJour: maintenant() });
+        }
+        return d.id;
+      }
+      const id = nouvelId();
+      await base.tiers.add({ id, misAJour: maintenant(), ...fiche });
+      return id;
+    },
+
+    async supprimerTiers(id: string): Promise<void> {
+      await base.tiers.update(id, { supprimeLe: maintenant(), misAJour: maintenant() });
+    },
+
+    async enregistrerEmploye(d: { id?: string; nom: string; poste?: string; salaire: number; telephone?: string; debut?: string; fin?: string }): Promise<string> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom à l’employé.');
+      if (!Number.isInteger(d.salaire) || d.salaire <= 0) throw new ErreurSaisie('Salaire mensuel : entrez un nombre entier de FCFA supérieur à zéro.');
+      for (const m of [d.debut, d.fin]) if (m && !/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw new ErreurSaisie('Les mois se notent ainsi : 2026-10.');
+      if (d.debut && d.fin && d.fin < d.debut) throw new ErreurSaisie('Le dernier mois ne peut pas précéder le premier.');
+      const fiche: Omit<Employe, 'id' | 'misAJour'> = {
+        nom, salaire: d.salaire,
+        ...(d.poste?.trim() ? { poste: d.poste.trim() } : {}), ...(d.telephone?.trim() ? { telephone: d.telephone.trim() } : {}),
+        ...(d.debut ? { debut: d.debut } : {}), ...(d.fin ? { fin: d.fin } : {}),
+      };
+      if (d.id) {
+        if (!(await base.employes.get(d.id))) throw new ErreurSaisie('Employé introuvable.');
+        await base.employes.put({ id: d.id, misAJour: maintenant(), ...fiche });
+        return d.id;
+      }
+      const id = nouvelId();
+      await base.employes.add({ id, misAJour: maintenant(), ...fiche });
+      return id;
+    },
+
+    /** Retire un employé de la liste (ses paies passées restent dans les comptes). */
+    async supprimerEmploye(id: string): Promise<void> {
+      await base.employes.update(id, { supprimeLe: maintenant(), misAJour: maintenant() });
+    },
+
+    /** Verse un salaire, une avance ou une prime : c'est une dépense « main-d'œuvre » payée, rattachée à l'employé et au mois. */
+    async payerSalaire(d: { employeId: string; periode: string; montant: number; nature: NatureSalaire; mode?: ModePaiement; date?: Jour; note?: string }): Promise<Annulation> {
+      const e = await base.employes.get(d.employeId);
+      if (!e || e.supprimeLe) throw new ErreurSaisie('Employé introuvable.');
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(d.periode)) throw new ErreurSaisie('Mois invalide.');
+      return this.ajouterOperation({
+        sens: 'depense', categorie: 'main_oeuvre', montant: d.montant, tiers: e.nom, paye: true, employeId: e.id, periode: d.periode, nature: d.nature,
+        ...(d.mode ? { mode: d.mode } : {}), ...(d.date ? { date: d.date } : {}), ...(d.note ? { note: d.note } : {}),
+      });
     },
 
     /* ---------- Quarantaine des nouveaux arrivants ---------- */
@@ -448,6 +576,10 @@ export function creerRepo(base: BaseElevage = db) {
     },
 
     /** Suppression logique : la ligne reste dans la base, l'historique est conservé. */
+    async restaurerOperation(id: string): Promise<void> {
+      await base.operations.update(id, { supprimeLe: null, misAJour: maintenant() });
+    },
+
     async annuler(a: Annulation): Promise<void> {
       await base.table(a.table).update(a.id, { supprimeLe: maintenant(), misAJour: maintenant() });
     },

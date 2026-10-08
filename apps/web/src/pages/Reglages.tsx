@@ -5,6 +5,7 @@ import { chargerDemo } from '../demo';
 import { depuisQuand, useConnexion } from './Compte';
 import { TYPES_LOGEMENT } from '../i18n/fr';
 import { ErreurSaisie, repo } from '../repo';
+import type { Reglages } from '../reglages';
 import type { Elevage } from '../useElevage';
 
 export function Reglages({ elevage }: { elevage: Elevage }) {
@@ -14,6 +15,7 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
       <CarteCompte />
       <h2>Mon élevage</h2>
       <NomElevage nom={elevage.reglages.nomElevage} />
+      <Identite identite={elevage.reglages.identite} />
       <h2>Mes locaux</h2>
       <Locaux logements={elevage.donnees.logements} />
       <h2>Places et seuils d’alerte</h2>
@@ -49,6 +51,20 @@ function NomElevage({ nom }: { nom: string }) {
     <div className="carte">
       <Champ libelle="Nom de l’élevage"><input value={v} onChange={(e) => setV(e.target.value)} /></Champ>
       <button className="bouton court" onClick={async () => { await repo.ecrireReglage('nomElevage', v.trim()); notifier('Enregistré ✓'); }}>Enregistrer</button>
+    </div>
+  );
+}
+
+function Identite({ identite }: { identite: Reglages['identite'] }) {
+  const [v, setV] = useState(identite);
+  const notifier = useNotifier();
+  return (
+    <div className="carte">
+      <p className="muet">Ces informations s’impriment en haut de vos factures. Toutes sont facultatives.</p>
+      <Champ libelle="Adresse"><input value={v.adresse} onChange={(e) => setV({ ...v, adresse: e.target.value })} /></Champ>
+      <Champ libelle="Téléphone"><input type="tel" value={v.telephone} onChange={(e) => setV({ ...v, telephone: e.target.value })} /></Champ>
+      <Champ libelle="NINEA ou registre de commerce"><input value={v.ninea} onChange={(e) => setV({ ...v, ninea: e.target.value })} /></Champ>
+      <button className="bouton court" onClick={async () => { await repo.ecrireReglage('identite', { adresse: v.adresse.trim(), telephone: v.telephone.trim(), ninea: v.ninea.trim() }); notifier('Enregistré ✓'); }}>Enregistrer</button>
     </div>
   );
 }

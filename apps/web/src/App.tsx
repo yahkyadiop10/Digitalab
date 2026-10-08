@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { jourLocal } from '@digitalab/core';
 import { Navigation, FournisseurNotif, OutilsEntete } from './components/ui';
 import { db } from './db';
 import { Accueil } from './pages/Accueil';
@@ -7,7 +8,10 @@ import { FicheLot, ListeCheptel, NouveauLot } from './pages/Cheptel';
 import { FicheIncubation, NouvelleIncubation, PageAppareil, PageCouveuse } from './pages/Couveuse';
 import { Demarrage } from './pages/Demarrage';
 import { FicheQuarantaine, FormArrivee, PageQuarantaine } from './pages/Quarantaine';
+import { PageCarnet, FicheTiers } from './pages/Carnet';
 import { FormOperation, PageFinances } from './pages/Finances';
+import { PageOperation, PageFacture } from './pages/Operation';
+import { FormEmploye, FormPaie, PageBulletin, PageSalaires } from './pages/Paie';
 import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
 import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
 import { PageCompte, useConnexion } from './pages/Compte';
@@ -46,6 +50,17 @@ function Page({ elevage }: { elevage: Elevage }) {
       return a ? <FicheQuarantaine elevage={elevage} id={a} /> : <PageQuarantaine elevage={elevage} />;
     case 'finances':
       if (a === 'depense' || a === 'recette') return <FormOperation elevage={elevage} sens={a} lotInitial={params.get('lot')} />;
+      if (a === 'op' && segments[2]) return segments[3] === 'facture' ? <PageFacture elevage={elevage} id={segments[2]} /> : <PageOperation elevage={elevage} id={segments[2]} />;
+      if (a === 'carnet') return segments[2] === 'nouveau' ? <FicheTiers elevage={elevage} /> : segments[2] ? <FicheTiers elevage={elevage} id={segments[2]} /> : <PageCarnet elevage={elevage} />;
+      if (a === 'salaires') {
+        if (segments[2] === 'employe') return <FormEmploye elevage={elevage} {...(segments[3] ? { id: segments[3] } : {})} />;
+        if (segments[2] === 'payer' && segments[3]) {
+          const nature = params.get('nature');
+          return <FormPaie elevage={elevage} employeId={segments[3]} periode={params.get('mois') ?? jourLocal(elevage.maintenant).slice(0, 7)} nature={nature === 'avance' || nature === 'prime' ? nature : 'salaire'} />;
+        }
+        if (segments[2] === 'bulletin' && segments[3] && segments[4]) return <PageBulletin elevage={elevage} employeId={segments[3]} periode={segments[4]} />;
+        return <PageSalaires elevage={elevage} moisInitial={params.get('mois')} />;
+      }
       return <PageFinances elevage={elevage} />;
     case 'alertes':
       return <Alertes elevage={elevage} />;

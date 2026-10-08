@@ -80,6 +80,27 @@ describe('synchronisation côté appareil', () => {
     expect((await b.base.logements.get(id))?.nom).toBe('Poulailler B');
   });
 
+  it('partage factures, règlements, carnet et employés entre appareils', async () => {
+    const a = await appareil(serveur);
+    const b = await appareil(serveur);
+    const f = await a.repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', tiers: 'Awa', paye: false, acompte: 1000, lignes: [{ libelle: 'Œufs', quantite: 2, prixUnitaire: 1500 }] });
+    await a.repo.enregistrerEmploye({ nom: 'Moussa', salaire: 45000 });
+    await a.synchro.synchroniser();
+    await b.synchro.synchroniser();
+    expect(await b.base.operations.get(f.id)).toMatchObject({ montant: 3000, numero: expect.stringMatching(/^F-\d{4}-0001$/) });
+    expect(await b.base.paiements.count()).toBe(1);
+    expect(await b.base.tiers.count()).toBe(1);
+    expect(await b.base.employes.count()).toBe(1);
+    // Deux règlements saisis en même temps sur deux téléphones sont tous deux conservés.
+    await a.repo.ajouterPaiement(f.id, 500, 'wave');
+    await b.repo.ajouterPaiement(f.id, 700, 'especes');
+    await a.synchro.synchroniser();
+    await b.synchro.synchroniser();
+    await a.synchro.synchroniser();
+    expect(await a.base.paiements.count()).toBe(3);
+    expect(await b.base.paiements.count()).toBe(3);
+  });
+
   it('propage une annulation (suppression logique)', async () => {
     const a = await appareil(serveur);
     const b = await appareil(serveur);

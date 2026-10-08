@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { coutAlimentParOeuf, enAttente, exporterCsv, lignesFinance, moisDecale, parCategorie, parLot, resume, type OperationFinanciere } from './finances';
+import {
+  coutAlimentParOeuf, employesDuMois, enAttente, enRetard, exporterCsv, fluxParMode, lignesFinance, moisDecale, parCategorie, parLot, prochainNumeroFacture,
+  reglement, resume, soldesParTiers, suiviSalaires, totalLignes, type Employe, type OperationFinanciere, type Paiement,
+} from './finances';
 import type { EntreeStock, Ponte } from './types';
 
 const base = { misAJour: 0 };
@@ -68,6 +71,89 @@ describe('mois et export', () => {
   });
   it('exporte un CSV lisible par Excel, avec les guillemets protégés', () => {
     const l = lignesFinance([op('recette', 'oeufs', 5000, '2026-10-03', { tiers: 'Dupont; "Fils"', lotId: 'a' })], []);
-    expect(exporterCsv(l, () => 'Lot A')).toBe('Date;Type;Catégorie;Montant (FCFA);Lot;Client ou fournisseur;Payé\n2026-10-03;Recette;Œufs;5000;Lot A;"Dupont; ""Fils""";oui');
+    expect(exporterCsv(l, () => 'Lot A')).toBe('Date;Type;Catégorie;Montant (FCFA);Lot;Client ou fournisseur;Payé;N°;Reste à régler (FCFA)\n2026-10-03;Recette;Œufs;5000;Lot A;"Dupont; ""Fils""";oui;;0');
+  });
+});
+
+const paiement = (operationId: string, montant: number, date = '2026-10-10', mode: Paiement['mode'] = 'especes'): Paiement => ({ id: `p${++n}`, ...base, operationId, montant, date, mode });
+
+describe('factures détaillées', () => {
+  it('additionne les lignes et déduit la remise, sans jamais descendre sous zéro', () => {
+    const lignes = [{ libelle: 'Plateaux d’œufs', quantite: 30, prixUnitaire: 2500 }, { libelle: 'Poulets', quantite: 2.5, prixUnitaire: 3333 }];
+    expect(totalLignes(lignes)).toBe(75000 + 8333);
+    expect(totalLignes(lignes, 3333)).toBe(80000);
+    expect(totalLignes(lignes, 1_000_000)).toBe(0);
+    expect(totalLignes([])).toBe(0);
+  });
+
+  it('numérote les ventes de l’année à la suite, sans compter les autres années ni les dépenses', () => {
+    const vente = (numero: string, sens: OperationFinanciere['sens'] = 'recette') => op(sens, 'oeufs', 1000, '2026-01-01', { numero });
+    expect(prochainNumeroFacture([], 2026)).toBe('F-2026-0001');
+    expect(prochainNumeroFacture([vente('F-2026-0001'), vente('F-2026-0007'), vente('F-2025-0099'), vente('F-2026-0050', 'depense'), vente('abc')], 2026)).toBe('F-2026-0008');
+  });
+});
+
+describe('règlements partiels', () => {
+  const facture = op('recette', 'poussins', 100000, '2026-10-05', { paye: false, tiers: 'M. Diop', tiersId: 't1', echeance: '2026-10-20' });
+  it('un acompte laisse un reste ; le solde ferme la facture', () => {
+    expect(reglement(facture, [])).toEqual({ regle: 0, reste: 100000 });
+    expect(reglement(facture, [paiement(facture.id, 40000)])).toEqual({ regle: 40000, reste: 60000 });
+    expect(reglement(facture, [paiement(facture.id, 40000), paiement(facture.id, 60000)])).toEqual({ regle: 100000, reste: 0 });
+  });
+  it('ignore les paiements annulés et ceux d’autres opérations', () => {
+    const annule = { ...paiement(facture.id, 70000), supprimeLe: 5 };
+    expect(reglement(facture, [annule, paiement('autre', 10000)]).reste).toBe(100000);
+  });
+  it('ne dépasse jamais zéro en cas de trop-perçu', () => {
+    expect(reglement(facture, [paiement(facture.id, 120000)])).toEqual({ regle: 120000, reste: 0 });
+  });
+  it('reconnaît l’ancien indicateur « payé » quand il n’y a aucun règlement détaillé', () => {
+    expect(reglement(op('depense', 'soins', 8000, '2026-10-02'), []).reste).toBe(0);
+  });
+  it('les en-attente et les retards se calculent sur le reste', () => {
+    const l = lignesFinance([facture], [], [paiement(facture.id, 40000)]);
+    expect(l[0]).toMatchObject({ reste: 60000, paye: false });
+    expect(enAttente(l).totalAEncaisser).toBe(60000);
+    expect(enRetard(l[0]!, '2026-10-21')).toBe(true);
+    expect(enRetard(l[0]!, '2026-10-20')).toBe(false);
+    const soldee = lignesFinance([facture], [], [paiement(facture.id, 100000)]);
+    expect(enRetard(soldee[0]!, '2026-12-01')).toBe(false);
+    expect(enAttente(soldee).aEncaisser).toHaveLength(0);
+  });
+  it('totalise ce que doit chaque client et ce que vous devez à chaque fournisseur', () => {
+    const achat = op('depense', 'materiel', 30000, '2026-10-01', { paye: false, tiersId: 'f1' });
+    const l = lignesFinance([facture, achat], [], [paiement(facture.id, 40000)]);
+    const s = soldesParTiers(l);
+    expect(s.get('t1')).toEqual({ aEncaisser: 60000, aPayer: 0 });
+    expect(s.get('f1')).toEqual({ aEncaisser: 0, aPayer: 30000 });
+  });
+  it('répartit l’argent réellement encaissé ou payé par moyen de paiement', () => {
+    const achat = op('depense', 'materiel', 30000, '2026-10-01', { paye: false });
+    const flux = fluxParMode([facture, achat], [paiement(facture.id, 40000, '2026-10-10', 'wave'), paiement(achat.id, 5000, '2026-10-11', 'especes'), paiement(facture.id, 1000, '2026-09-30', 'wave')], '2026-10');
+    expect(flux).toEqual([{ mode: 'especes', encaisse: 0, paye: 5000 }, { mode: 'wave', encaisse: 40000, paye: 0 }]);
+  });
+});
+
+describe('salaires', () => {
+  const emp = (id: string, salaire: number, extra: Partial<Employe> = {}): Employe => ({ id, ...base, nom: id, salaire, ...extra });
+  const paie = (employeId: string, montant: number, nature: OperationFinanciere['nature'], periode = '2026-10') =>
+    op('depense', 'main_oeuvre', montant, '2026-10-28', { employeId, periode, nature });
+  const employes = [emp('awa', 60000), emp('moussa', 45000), emp('ancien', 30000, { fin: '2026-09' }), emp('futur', 30000, { debut: '2026-11' }), { ...emp('supprime', 1), supprimeLe: 1 }];
+
+  it('ne retient que les employés présents ce mois-là', () => {
+    expect(employesDuMois(employes, '2026-10').map((e) => e.id)).toEqual(['awa', 'moussa']);
+    expect(employesDuMois(employes, '2026-09').map((e) => e.id)).toEqual(['awa', 'moussa', 'ancien']);
+  });
+  it('compte les avances dans ce qui est versé et laisse les primes à part', () => {
+    const s = suiviSalaires(employes, [paie('awa', 20000, 'avance'), paie('awa', 40000, 'salaire'), paie('awa', 10000, 'prime'), paie('moussa', 15000, 'avance'), paie('moussa', 45000, 'salaire', '2026-09')], '2026-10');
+    expect(s.find((x) => x.employe.id === 'awa')).toMatchObject({ du: 60000, verse: 60000, primes: 10000, reste: 0, statut: 'paye' });
+    expect(s.find((x) => x.employe.id === 'moussa')).toMatchObject({ verse: 15000, reste: 30000, statut: 'partiel' });
+  });
+  it('signale « à payer » quand rien n’a été versé', () => {
+    expect(suiviSalaires(employes, [], '2026-10').every((x) => x.statut === 'a_payer' && x.reste === x.du)).toBe(true);
+  });
+  it('ne tient pas compte des salaires annulés', () => {
+    const annule = { ...paie('awa', 60000, 'salaire'), supprimeLe: 3 };
+    expect(suiviSalaires(employes, [annule], '2026-10')[0]!.statut).toBe('a_payer');
   });
 });

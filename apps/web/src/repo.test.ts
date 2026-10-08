@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { effectifs, stockAlimentKg } from '@digitalab/core';
 import { BaseElevage } from './db';
-import { ErreurSaisie, creerRepo, type Repo } from './repo';
+import { ErreurSaisie, aujourdhui, creerRepo, type Repo } from './repo';
 import { fusionnerReglages } from './reglages';
 import { appliquerEtats } from './useElevage';
 
@@ -208,13 +208,78 @@ describe('incubation', () => {
 describe('finances', () => {
   it('note une dépense payée et une recette à encaisser, puis la marque encaissée', async () => {
     const a = await repo.ajouterOperation({ sens: 'depense', categorie: 'materiel', montant: 12000, tiers: ' Quincaillerie ' });
-    expect(await base.operations.get(a.id)).toMatchObject({ sens: 'depense', montant: 12000, paye: true, tiers: 'Quincaillerie' });
+    expect(await base.operations.get(a.id)).toMatchObject({ sens: 'depense', montant: 12000, tiers: 'Quincaillerie' });
+    expect(await base.paiements.where('operationId').equals(a.id).toArray()).toMatchObject([{ montant: 12000, mode: 'especes' }]);
     const b = await repo.ajouterOperation({ sens: 'recette', categorie: 'poussins', montant: 45000, paye: false });
-    expect((await base.operations.get(b.id))?.payeLe).toBeUndefined();
-    await repo.marquerPaye(b.id, true);
-    expect(await base.operations.get(b.id)).toMatchObject({ paye: true, payeLe: expect.any(String) });
+    expect(await base.paiements.where('operationId').equals(b.id).count()).toBe(0);
+    await repo.marquerPaye(b.id, 'wave');
+    expect(await base.paiements.where('operationId').equals(b.id).toArray()).toMatchObject([{ montant: 45000, mode: 'wave' }]);
     await repo.annuler(a);
     expect((await base.operations.get(a.id))?.supprimeLe).toBeTruthy();
+  });
+
+  it('crée une facture détaillée numérotée, avec remise et acompte', async () => {
+    const f = await repo.ajouterOperation({
+      sens: 'recette', categorie: 'oeufs', tiers: 'Boutique Awa', telephoneTiers: '77 111 22 33', paye: false, acompte: 20000, mode: 'wave', remise: 2500, echeance: aujourdhui(),
+      lignes: [{ libelle: ' Plateaux d’œufs ', quantite: 30, prixUnitaire: 2500 }, { libelle: 'Poulets', quantite: 2, prixUnitaire: 3000 }],
+    });
+    const op = (await base.operations.get(f.id))!;
+    expect(op).toMatchObject({ montant: 78500, remise: 2500, numero: `F-${aujourdhui().slice(0, 4)}-0001`, tiers: 'Boutique Awa' });
+    expect(op.lignes?.[0]?.libelle).toBe('Plateaux d’œufs');
+    expect((await base.tiers.get(op.tiersId!))?.telephone).toBe('77 111 22 33');
+    const g = await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', paye: false, lignes: [{ libelle: 'Œufs', quantite: 1, prixUnitaire: 1000 }] });
+    expect((await base.operations.get(g.id))?.numero).toBe(`F-${aujourdhui().slice(0, 4)}-0002`);
+  });
+
+  it('retrouve le client du carnet au lieu d’en créer un second', async () => {
+    await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 1000, tiers: 'M. Diop' });
+    await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 2000, tiers: 'm. diop' });
+    expect(await base.tiers.count()).toBe(1);
+  });
+
+  it('refuse un règlement qui dépasse le reste, et accepte les règlements successifs', async () => {
+    const f = await repo.ajouterOperation({ sens: 'recette', categorie: 'poussins', montant: 100000, paye: false, acompte: 30000 });
+    await expect(repo.ajouterPaiement(f.id, 80000, 'especes')).rejects.toThrow(/70000/);
+    await repo.ajouterPaiement(f.id, 70000, 'orange_money');
+    await expect(repo.ajouterPaiement(f.id, 1, 'especes')).rejects.toThrow(/déjà entièrement réglée/);
+  });
+
+  it('annuler un règlement rouvre le reste à payer', async () => {
+    const f = await repo.ajouterOperation({ sens: 'depense', categorie: 'materiel', montant: 10000, paye: false });
+    const p = await repo.ajouterPaiement(f.id, 10000, 'especes');
+    await repo.annuler(p);
+    await repo.ajouterPaiement(f.id, 10000, 'wave');
+  });
+
+  it('refuse un acompte supérieur au total, une ligne sans nom ou sans quantité, une échéance passée', async () => {
+    await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 1000, paye: false, acompte: 2000 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', lignes: [{ libelle: ' ', quantite: 1, prixUnitaire: 5 }] })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', lignes: [{ libelle: 'A', quantite: 0, prixUnitaire: 5 }] })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 100, paye: false, echeance: '2000-01-01' })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('verse un salaire : dépense de main-d’œuvre payée, rattachée à l’employé et au mois', async () => {
+    const e = await repo.enregistrerEmploye({ nom: 'Moussa', poste: 'Soigneur', salaire: 45000 });
+    const p = await repo.payerSalaire({ employeId: e, periode: '2026-10', montant: 15000, nature: 'avance', mode: 'wave' });
+    expect(await base.operations.get(p.id)).toMatchObject({ sens: 'depense', categorie: 'main_oeuvre', employeId: e, periode: '2026-10', nature: 'avance', tiers: 'Moussa' });
+    expect(await base.paiements.where('operationId').equals(p.id).toArray()).toMatchObject([{ montant: 15000, mode: 'wave' }]);
+    await expect(repo.payerSalaire({ employeId: 'x', periode: '2026-10', montant: 1000, nature: 'salaire' })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.payerSalaire({ employeId: e, periode: 'octobre', montant: 1000, nature: 'salaire' })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('contrôle la fiche d’un employé et d’un client', async () => {
+    await expect(repo.enregistrerEmploye({ nom: '', salaire: 1000 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.enregistrerEmploye({ nom: 'A', salaire: 0 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.enregistrerEmploye({ nom: 'A', salaire: 1000, debut: '2026-10', fin: '2026-09' })).rejects.toBeInstanceOf(ErreurSaisie);
+    await repo.enregistrerTiers({ nom: 'Diop' });
+    await expect(repo.enregistrerTiers({ nom: ' diop ' })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('renommer un client met à jour ses factures', async () => {
+    const o = await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 1000, tiers: 'Diop' });
+    const tiersId = (await base.operations.get(o.id))!.tiersId!;
+    await repo.enregistrerTiers({ id: tiersId, nom: 'Ibrahima Diop', telephone: '77 000 11 22' });
+    expect((await base.operations.get(o.id))?.tiers).toBe('Ibrahima Diop');
   });
 
   it('refuse un montant nul, décimal ou une date future', async () => {
@@ -223,12 +288,16 @@ describe('finances', () => {
     await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 100, date: '2999-01-01' })).rejects.toBeInstanceOf(ErreurSaisie);
   });
 
-  it('sauvegarde aussi les opérations', async () => {
-    await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 5000 });
+  it('sauvegarde aussi les opérations, les règlements, le carnet et les employés', async () => {
+    await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 5000, tiers: 'Awa' });
+    await repo.enregistrerEmploye({ nom: 'Moussa', salaire: 45000 });
     const json = await repo.exporter();
     await repo.toutEffacer();
     await repo.importer(json);
     expect(await base.operations.count()).toBe(1);
+    expect(await base.paiements.count()).toBe(1);
+    expect(await base.tiers.count()).toBe(1);
+    expect(await base.employes.count()).toBe(1);
   });
 });
 

@@ -67,8 +67,8 @@ function LocalLigne({ l, niveau }: { l: LigneLocal; niveau: Niveau | 'vert' }) {
 }
 
 export function Tableau({ elevage }: { elevage: Elevage }) {
-  const { donnees, operations, reglages, maintenant } = elevage;
-  const t = useMemo(() => tableauDeBord({ donnees, operations, especes: reglages.especes, protocoles: reglages.protocoles, maintenant }), [donnees, operations, reglages.especes, reglages.protocoles, maintenant]);
+  const { donnees, operations, paiements, employes, reglages, maintenant } = elevage;
+  const t = useMemo(() => tableauDeBord({ donnees, operations, paiements, employes, especes: reglages.especes, protocoles: reglages.protocoles, maintenant }), [donnees, operations, paiements, employes, reglages.especes, reglages.protocoles, maintenant]);
   const auj = jourLocal(maintenant);
   const stock = donnees.entreesStock.length > 0 ? stockAlimentKg(donnees) : null;
   const conso = consommationMoyenneKg(donnees, auj);
@@ -144,7 +144,11 @@ export function Tableau({ elevage }: { elevage: Elevage }) {
               <h4>En attente</h4>
               <Ligne libelle="On vous doit" valeur={formatMontant(t.finances.aEncaisser)} />
               <Ligne libelle="Vous devez" valeur={formatMontant(t.finances.aPayer)} />
+              {t.finances.enRetard > 0 && <p className="erreur">{t.finances.enRetard} règlement{t.finances.enRetard > 1 ? 's' : ''} en retard</p>}
             </>
+          )}
+          {t.finances.salairesAPayer > 0 && (
+            <p><a className="lien" href="#/finances/salaires">{t.finances.salairesAPayer} salaire{t.finances.salairesAPayer > 1 ? 's' : ''} à payer ce mois-ci</a></p>
           )}
         </Carte>
 

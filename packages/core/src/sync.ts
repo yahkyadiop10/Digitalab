@@ -13,6 +13,9 @@ export const TABLES_SYNCHRONISEES = [
   'operations',
   'quarantaines',
   'notesQuarantaine',
+  'paiements',
+  'tiers',
+  'employes',
 ] as const;
 
 export type TableSynchronisee = (typeof TABLES_SYNCHRONISEES)[number];

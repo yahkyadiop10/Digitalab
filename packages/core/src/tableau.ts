@@ -1,6 +1,6 @@
 import { ajouterJours, ecartJours, jourLocal, type Jour } from './dates';
 import { effectifs } from './effectif';
-import { enAttente, lignesFinance, resume, type OperationFinanciere } from './finances';
+import { enAttente, enRetard, lignesFinance, resume, suiviSalaires, type Employe, type OperationFinanciere, type Paiement } from './finances';
 import { etapesIncubation, incubationsEnCours, oeufsRestants, profilDe } from './incubation';
 import { quarantainesActives } from './quarantaine';
 import { delaisEnCours, finEvenement, vaccinsAFaire } from './sante';
@@ -48,6 +48,10 @@ export interface TableauDeBord {
     resultatMois: number;
     aEncaisser: number;
     aPayer: number;
+    /** Factures dont la date limite est dépassée. */
+    enRetard: number;
+    /** Employés dont le salaire du mois n'est pas soldé (rappel à partir du 25). */
+    salairesAPayer: number;
   };
   sante: { vaccinsAFaire: number; traitementsEnCours: number; delaisAttente: number };
 }
@@ -55,6 +59,8 @@ export interface TableauDeBord {
 interface Entree {
   donnees: DonneesElevage;
   operations: OperationFinanciere[];
+  paiements?: Paiement[];
+  employes?: Employe[];
   especes: Record<string, EspeceConfig>;
   protocoles: ProtocoleVaccin[];
   maintenant: Date;
@@ -63,7 +69,7 @@ interface Entree {
 const vivants = <T extends { supprimeLe?: number | null }>(xs: T[]) => xs.filter((x) => !x.supprimeLe);
 
 /** Rassemble en un seul calcul tout ce que montre le tableau de bord de l'accueil. */
-export function tableauDeBord({ donnees, operations, especes, protocoles, maintenant }: Entree): TableauDeBord {
+export function tableauDeBord({ donnees, operations, paiements = [], employes = [], especes, protocoles, maintenant }: Entree): TableauDeBord {
   const auj = jourLocal(maintenant);
   const eff = effectifs(donnees.mouvements);
   const lots = vivants(donnees.lots).filter((l) => !l.archive && (eff.get(l.id) ?? 0) > 0);
@@ -130,10 +136,12 @@ export function tableauDeBord({ donnees, operations, especes, protocoles, mainte
   }
 
   // Finances
-  const lignes = lignesFinance(operations, donnees.entreesStock);
+  const lignes = lignesFinance(operations, donnees.entreesStock, paiements);
   const tout = resume(lignes);
   const mois = resume(lignes, auj.slice(0, 7));
   const attente = enAttente(lignes);
+  // Les salaires du mois se rappellent à partir du 25.
+  const salairesAPayer = Number(auj.slice(8, 10)) >= 25 ? suiviSalaires(employes, operations, auj.slice(0, 7)).filter((x) => x.statut !== 'paye').length : 0;
 
   // Santé
   const vaccins = vaccinsAFaire(donnees.lots, donnees.mouvements, donnees.evenementsSante, protocoles, auj).filter((v) => v.statut !== 'a_renseigner');
@@ -160,6 +168,8 @@ export function tableauDeBord({ donnees, operations, especes, protocoles, mainte
       recettesTotal: tout.recettes, depensesTotal: tout.depenses, resultatTotal: tout.resultat,
       recettesMois: mois.recettes, depensesMois: mois.depenses, resultatMois: mois.resultat,
       aEncaisser: attente.totalAEncaisser, aPayer: attente.totalAPayer,
+      enRetard: lignes.filter((l) => enRetard(l, auj)).length,
+      salairesAPayer,
     },
     sante: { vaccinsAFaire: vaccins.length, traitementsEnCours: traitements, delaisAttente: delaisEnCours(donnees.evenementsSante, auj).length },
   };
