@@ -16,6 +16,7 @@ import { FormEmploye, FormPaie, PageBulletin, PageSalaires } from './pages/Paie'
 import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
 import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
 import { PageCompte, useConnexion } from './pages/Compte';
+import { PageJournal } from './pages/Journal';
 import { FormUtilisateur, PageUtilisateurs } from './pages/Utilisateurs';
 import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
@@ -82,6 +83,8 @@ function Page({ elevage }: { elevage: Elevage }) {
       return <Alertes elevage={elevage} />;
     case 'compte':
       return <PageCompte />;
+    case 'journal':
+      return <PageJournal elevage={elevage} />;
     case 'utilisateurs':
       return a ? <FormUtilisateur elevage={elevage} {...(a === 'nouveau' ? {} : { telephone: decodeURIComponent(a) })} /> : <PageUtilisateurs elevage={elevage} />;
     case 'reglages':

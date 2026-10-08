@@ -197,6 +197,7 @@ function Connecte({ connexion }: { connexion: Connexion }) {
         <div className="ligne"><span>Votre profil</span><b>{connexion.fonction ? `${connexion.fonction} · ` : ''}{LIBELLES_PROFILS[connexion.role]}</b></div>
         {connexion.zones.length > 0 && <div className="ligne"><span>Vos bâtiments</span><b>{connexion.zones.length} réservé{connexion.zones.length > 1 ? 's' : ''}</b></div>}
         <div className="ligne"><span>Votre numéro</span><b>{connexion.telephone}</b></div>
+        <MonNom />
         <div className="ligne"><span>Dernière synchronisation</span><b>{depuisQuand(connexion.derniereSync)}</b></div>
         {connexion.erreur && <p className="erreur" role="alert">{connexion.erreur}</p>}
         {!peutEcrire && <p className="muet">Votre profil permet de consulter l’élevage, pas de le modifier : ce que vous saisissez ici n’est pas envoyé.</p>}
@@ -213,5 +214,21 @@ function Connecte({ connexion }: { connexion: Connexion }) {
         <button className="lien danger" onClick={() => void quitter()}>Se déconnecter de cet appareil</button>
       </div>
     </>
+  );
+}
+
+/** Le nom sous lequel la personne apparaît dans le journal d'activité et la liste des utilisateurs. */
+function MonNom() {
+  const notifier = useNotifier();
+  const [nom, setNom] = useState('');
+  const [erreur, setErreur] = useState<string | null>(null);
+  return (
+    <div className="champ-nom">
+      <Champ libelle="Votre nom" aide="Il apparaît dans le journal d’activité à côté de ce que vous faites.">
+        <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Aminata Sow" />
+      </Champ>
+      {erreur && <p className="erreur" role="alert">{erreur}</p>}
+      <button className="bouton alt court" disabled={!nom.trim()} onClick={async () => { try { await synchro.definirMonNom(nom); setErreur(null); notifier('Nom enregistré ✓'); } catch (e) { setErreur(messageErreur(e)); } }}>Enregistrer mon nom</button>
+    </div>
   );
 }

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ChangementSync, ReponseSync } from '@digitalab/core';
+import type { ChangementSync, EntreeJournal, ReponseSync } from '@digitalab/core';
 import { creerBanc, seConnecter, URL_BASE_TEST, type Banc, type Session } from './test-utils.js';
 import { lireConfig } from './config.js';
 
@@ -469,6 +469,149 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect(r.statusCode).toBe(200);
       expect((await get('/v1/moi', aide)).statusCode).toBe(401);
       expect((await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent('+221774000033')}/deconnexion`, {}, patron)).statusCode).toBe(400);
+    });
+  });
+
+  describe('journal d’activité', () => {
+    const inviter = (patron: Session, corps: Record<string, unknown>) => post(`/v1/organisations/${patron.organisationId}/membres`, corps, patron);
+    const journal = async (s: Session, requete = '', org = s.organisationId) => get(`/v1/organisations/${org}/journal${requete}`, s);
+
+    it('note qui a créé, modifié, annulé, sans doublon quand un appareil renvoie la même fiche', async () => {
+      const patron = await seConnecter(banc, '77 500 00 01');
+      await inviter(patron, { telephone: '77 500 00 02', role: 'personnalise', droits: ['saisie.ponte', 'saisie.annuler', 'cheptel.voir'], nom: 'Awa Fall', fonction: 'Aide' });
+      const aide = await seConnecter(banc, '77 500 00 02');
+      const org = patron.organisationId;
+      const ponte = (t: number, extra: Record<string, unknown> = {}) => enreg('pontes', 'p1', MAINTENANT + t, { nombre: 9, casses: 0, lotId: 'l', ...extra });
+      await sync(aide, 0, [ponte(1)], org);
+      await sync(aide, 0, [ponte(1)], org);
+      await sync(aide, 0, [ponte(2, { nombre: 10 })], org);
+      await sync(aide, 0, [ponte(3, { nombre: 10, supprimeLe: MAINTENANT + 3 })], org);
+      const r = (await journal(patron)).json() as { entrees: EntreeJournal[]; reste: boolean };
+      const ponteEntrees = r.entrees.filter((x) => x.table === 'pontes');
+      expect(ponteEntrees.map((x) => x.action)).toEqual(['annulation', 'modification', 'creation']);
+      expect(ponteEntrees[2]).toMatchObject({ telephone: '+221775000002', nom: 'Awa Fall', fonction: 'Aide', description: '9 œufs', faitLe: MAINTENANT + 1, enregistrementId: 'p1' });
+    });
+
+    it('ne note pas ce qui a été refusé', async () => {
+      const patron = await seConnecter(banc, '77 500 00 03');
+      await inviter(patron, { telephone: '77 500 00 04', role: 'lecteur' });
+      const lecteur = await seConnecter(banc, '77 500 00 04');
+      await sync(lecteur, 0, [enreg('lots', 'x', MAINTENANT, { nom: 'Pirate' })], patron.organisationId);
+      const r = (await journal(patron)).json() as { entrees: EntreeJournal[] };
+      expect(r.entrees.some((x) => x.enregistrementId === 'x')).toBe(false);
+    });
+
+    it('note aussi les changements d’utilisateurs, et réserve la consultation aux autorisés', async () => {
+      const patron = await seConnecter(banc, '77 500 00 05');
+      const org = patron.organisationId;
+      await inviter(patron, { telephone: '77 500 00 06', role: 'soigneur', nom: 'Moussa', fonction: 'Responsable bâtiment A' });
+      await inviter(patron, { telephone: '77 500 00 06', role: 'caissier' });
+      await post(`/v1/organisations/${org}/membres/${encodeURIComponent('+221775000006')}/deconnexion`, {}, patron);
+      await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${org}/membres/${encodeURIComponent('+221775000006')}`, headers: patron.entetes });
+      const r = (await journal(patron)).json() as { entrees: EntreeJournal[] };
+      const phrases = r.entrees.filter((x) => x.action === 'utilisateur').map((x) => x.description);
+      expect(phrases).toHaveLength(4);
+      expect(phrases[3]).toMatch(/a ajouté Moussa \(Responsable bâtiment A\) · profil soigneur/);
+      expect(phrases[2]).toMatch(/a modifié les droits de Moussa/);
+      expect(phrases[0]).toMatch(/a retiré/);
+
+      await inviter(patron, { telephone: '77 500 00 07', role: 'soigneur' });
+      expect((await journal(await seConnecter(banc, '77 500 00 07'), '', org)).statusCode).toBe(403);
+      await inviter(patron, { telephone: '77 500 00 08', role: 'gerant' });
+      expect((await journal(await seConnecter(banc, '77 500 00 08'), '', org)).statusCode).toBe(200);
+    });
+
+    it('pagine, filtre par personne ou par type, et reste propre à chaque élevage', async () => {
+      const patron = await seConnecter(banc, '77 500 00 09');
+      const autre = await seConnecter(banc, '77 500 00 10');
+      await sync(patron, 0, [1, 2, 3, 4, 5].map((n) => enreg('pontes', `q${n}`, MAINTENANT + n, { nombre: n, casses: 0, lotId: 'l' })));
+      await sync(patron, 0, [enreg('lots', 'lot-x', MAINTENANT, { nom: 'Soie' })]);
+      await sync(autre, 0, [enreg('pontes', 'z', MAINTENANT, { nombre: 1, casses: 0, lotId: 'l' })]);
+      const page1 = (await journal(patron, '?limite=3')).json() as { entrees: EntreeJournal[]; reste: boolean };
+      expect(page1.entrees).toHaveLength(3);
+      expect(page1.reste).toBe(true);
+      const page2 = (await journal(patron, `?limite=10&avant=${page1.entrees.at(-1)!.id}`)).json() as { entrees: EntreeJournal[]; reste: boolean };
+      expect(page2.entrees).toHaveLength(3);
+      expect(page2.reste).toBe(false);
+      expect(((await journal(patron, '?table=lots')).json() as { entrees: EntreeJournal[] }).entrees.map((x) => x.enregistrementId)).toEqual(['lot-x']);
+      expect(((await journal(patron, '?telephone=77%20500%2000%2009')).json() as { entrees: EntreeJournal[] }).entrees.every((x) => x.telephone === '+221775000009')).toBe(true);
+      expect((await journal(patron)).json().entrees.some((x: EntreeJournal) => x.enregistrementId === 'z')).toBe(false);
+      expect((await journal(patron, '', autre.organisationId)).statusCode).toBe(404);
+    });
+  });
+
+  describe('bâtiments réservés (zones appliquées par le serveur)', () => {
+    const inviter = (patron: Session, corps: Record<string, unknown>) => post(`/v1/organisations/${patron.organisationId}/membres`, corps, patron);
+
+    async function ferme(tel: string) {
+      const patron = await seConnecter(banc, tel);
+      await sync(patron, 0, [
+        enreg('logements', 'A', MAINTENANT, { nom: 'Bâtiment A' }),
+        enreg('logements', 'B', MAINTENANT, { nom: 'Bâtiment B' }),
+        enreg('lots', 'l1', MAINTENANT, { nom: 'Lot 1', logementId: 'A' }),
+        enreg('lots', 'l2', MAINTENANT, { nom: 'Lot 2', logementId: 'B' }),
+        enreg('lots', 'l3', MAINTENANT, { nom: 'Lot sans local' }),
+        enreg('mouvements', 'm1', MAINTENANT, { lotId: 'l1', type: 'arrivee', quantite: 5 }),
+        enreg('mouvements', 'm2', MAINTENANT, { lotId: 'l2', type: 'arrivee', quantite: 7 }),
+        enreg('pontes', 'po1', MAINTENANT, { lotId: 'l1', nombre: 3 }),
+        enreg('pontes', 'po2', MAINTENANT, { lotId: 'l2', nombre: 4 }),
+        enreg('distributions', 'di2', MAINTENANT, { lotId: 'l2', quantiteKg: 2 }),
+        enreg('evenementsSante', 's2', MAINTENANT, { lotId: 'l2', type: 'observation' }),
+        enreg('quarantaines', 'qa', MAINTENANT, { nom: 'Arrivage A', lotId: 'l1', logementId: 'A' }),
+        enreg('quarantaines', 'qb', MAINTENANT, { nom: 'Arrivage B', lotId: 'l2', logementId: 'B' }),
+        enreg('notesQuarantaine', 'na', MAINTENANT, { quarantaineId: 'qa' }),
+        enreg('notesQuarantaine', 'nb', MAINTENANT, { quarantaineId: 'qb' }),
+        enreg('operations', 'o-glob', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 1 }),
+        enreg('operations', 'o-l1', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 2, lotId: 'l1' }),
+        enreg('operations', 'o-l2', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 3, lotId: 'l2' }),
+        enreg('paiements', 'pa-l1', MAINTENANT, { operationId: 'o-l1', montant: 2 }),
+        enreg('paiements', 'pa-l2', MAINTENANT, { operationId: 'o-l2', montant: 3 }),
+        enreg('entreesStock', 'st', MAINTENANT, { quantiteKg: 10 }),
+      ]);
+      return patron;
+    }
+    const ids = async (s: Session, org: string) => ((await sync(s, 0, [], org)).json() as ReponseSync).changements.map((c) => c.enregistrement.id).sort();
+
+    it('ne renvoie que les bâtiments réservés, leurs lots et ce qui s’y rattache', async () => {
+      const patron = await ferme('77 600 00 01');
+      await inviter(patron, {
+        telephone: '77 600 00 02', role: 'personnalise', zones: ['A'], fonction: 'Responsable bâtiment A',
+        droits: ['saisie.ponte', 'saisie.aliment', 'cheptel.voir', 'sante.voir', 'quarantaine.voir', 'quarantaine.notes', 'finances.voir_depenses'],
+      });
+      const resp = await seConnecter(banc, '77 600 00 02');
+      expect(await ids(resp, patron.organisationId)).toEqual(['A', 'l1', 'm1', 'na', 'o-glob', 'o-l1', 'pa-l1', 'po1', 'qa', 'st']);
+      expect(await ids(patron, patron.organisationId)).toHaveLength(21);
+    });
+
+    it('n’accepte que des écritures dans ses bâtiments', async () => {
+      const patron = await ferme('77 600 00 03');
+      const org = patron.organisationId;
+      await inviter(patron, { telephone: '77 600 00 04', role: 'personnalise', zones: ['A'], droits: ['saisie.ponte', 'cheptel.lots', 'cheptel.deplacer', 'quarantaine.notes'] });
+      const resp = await seConnecter(banc, '77 600 00 04');
+      const envoyer = async (...c: ChangementSync[]) => ((await sync(resp, 0, c, org)).json() as ReponseSync).refuses;
+      expect(await envoyer(enreg('pontes', 'ok1', MAINTENANT + 1, { lotId: 'l1', nombre: 5 }))).toBe(0);
+      expect(await envoyer(enreg('pontes', 'ko1', MAINTENANT + 1, { lotId: 'l2', nombre: 5 }))).toBe(1);
+      expect(await envoyer(enreg('pontes', 'ko2', MAINTENANT + 1, { lotId: 'l3', nombre: 5 }))).toBe(1);
+      expect(await envoyer(enreg('pontes', 'ko3', MAINTENANT + 1, { lotId: 'inconnu', nombre: 5 }))).toBe(1);
+      expect(await envoyer(enreg('lots', 'neuf-a', MAINTENANT + 1, { nom: 'Neuf', logementId: 'A' }))).toBe(0);
+      expect(await envoyer(enreg('lots', 'neuf-b', MAINTENANT + 1, { nom: 'Neuf', logementId: 'B' }))).toBe(1);
+      expect(await envoyer(enreg('lots', 'l1', MAINTENANT + 2, { nom: 'Lot 1', logementId: 'B' }))).toBe(1);
+      expect(await envoyer(enreg('lots', 'l2', MAINTENANT + 2, { nom: 'Lot 2', logementId: 'A' }))).toBe(1);
+      expect(await envoyer(enreg('notesQuarantaine', 'nn', MAINTENANT + 1, { quarantaineId: 'qa' }))).toBe(0);
+      expect(await envoyer(enreg('notesQuarantaine', 'nm', MAINTENANT + 1, { quarantaineId: 'qb' }))).toBe(1);
+      const vus = await ids(patron, org);
+      expect(vus).toContain('ok1');
+      expect(vus).toContain('neuf-a');
+      expect(vus).not.toContain('ko1');
+      expect(vus).not.toContain('neuf-b');
+    });
+
+    it('sans zone, toute la ferme reste visible', async () => {
+      const patron = await ferme('77 600 00 05');
+      await inviter(patron, { telephone: '77 600 00 06', role: 'lecteur' });
+      const lecteur = await seConnecter(banc, '77 600 00 06');
+      const vus = await ids(lecteur, patron.organisationId);
+      expect(vus).toEqual(expect.arrayContaining(['A', 'B', 'l1', 'l2', 'l3', 'm2', 'po2']));
     });
   });
 });

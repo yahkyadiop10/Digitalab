@@ -4,6 +4,7 @@ export * from './effectif';
 export * from './fiche';
 export * from './finances';
 export * from './incubation';
+export * from './journal';
 export * from './parametres';
 export * from './permissions';
 export * from './quarantaine';

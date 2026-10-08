@@ -267,3 +267,8 @@ fieldset.carte legend { font-weight: 700; padding: 0 6px; }
 
 .document .logo-elevage { max-height: 84px; max-width: 220px; margin-bottom: 8px; }
 .logo-bloc .logo-elevage { max-height: 110px; max-width: 240px; margin-bottom: 10px; }
+
+.jour-journal::first-letter { text-transform: uppercase; }
+.jour-journal { text-transform: none; margin: 18px 0 8px; font-size: 16px; color: var(--muet); }
+.ligne-journal { align-items: flex-start; }
+.ligne-journal .heure { flex: none; font-variant-numeric: tabular-nums; padding-top: 2px; }

@@ -1,4 +1,4 @@
-import { normaliserTelephone, TABLES_SYNCHRONISEES, tablesEcrivables, type ChangementSync, type DemandeSync, type DroitsMembre, type EnregistrementSync, type ReponseSync, type RoleMembre, type TableSynchronisee } from '@digitalab/core';
+import { normaliserTelephone, TABLES_SYNCHRONISEES, type EntreeJournal, tablesEcrivables, type ChangementSync, type DemandeSync, type DroitsMembre, type EnregistrementSync, type ReponseSync, type RoleMembre, type TableSynchronisee } from '@digitalab/core';
 import { db, type BaseElevage, type Connexion } from './db';
 import { URL_SERVEUR_APERCU, creerServeurDemo } from './serveur-demo';
 
@@ -285,6 +285,24 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       const c = await lire();
       if (!c) throw new ErreurReseau('Non connecté.');
       await appeler(c.url, `/v1/organisations/${c.organisationId}/membres/${encodeURIComponent(telephone)}/deconnexion`, { jeton: c.jeton, methode: 'POST', corps: {} });
+    },
+
+    /** Le nom affiché dans le journal et la liste des utilisateurs. */
+    async definirMonNom(nom: string): Promise<void> {
+      const c = await lire();
+      if (!c) throw new ErreurReseau('Non connecté.');
+      await appeler(c.url, '/v1/moi', { jeton: c.jeton, methode: 'PATCH', corps: { nom: nom.trim() } });
+    },
+
+    /** Journal d'activité, du plus récent au plus ancien ; `avant` est l'identifiant de la dernière ligne déjà reçue. */
+    async journal(opts: { avant?: number; telephone?: string; limite?: number } = {}): Promise<{ entrees: EntreeJournal[]; reste: boolean }> {
+      const c = await lire();
+      if (!c) throw new ErreurReseau('Non connecté.');
+      const q = new URLSearchParams();
+      if (opts.avant) q.set('avant', String(opts.avant));
+      if (opts.telephone) q.set('telephone', opts.telephone);
+      q.set('limite', String(opts.limite ?? 50));
+      return appeler(c.url, `/v1/organisations/${c.organisationId}/journal?${q}`, { jeton: c.jeton });
     },
 
     synchroniser,

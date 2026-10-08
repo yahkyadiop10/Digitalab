@@ -104,6 +104,7 @@ export const MODULES: ModulePermissions[] = [
       f('admin.elevage', 'Modifier les informations de l’élevage et le logo'),
       f('admin.seuils', 'Régler les seuils d’alerte et les places par animal'),
       f('admin.utilisateurs', 'Gérer les utilisateurs et leurs droits'),
+      f('admin.journal', 'Consulter le journal d’activité (qui a fait quoi)'),
     ],
   },
 ];

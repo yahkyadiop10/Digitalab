@@ -57,6 +57,14 @@ try {
   await app.getByText('Moussa Ndiaye').waitFor();
   assert.match(await app.locator('body').innerText(), /Responsable bâtiment A/);
 
+  etape('5 journal d’activité');
+  await app.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
+  await app.getByRole('link', { name: /Journal d’activité/ }).click();
+  await app.getByText(/a ajouté Moussa Ndiaye/).waitFor();
+  await app.getByText(/a ajouté une ponte : 48 œufs/).waitFor();
+  await app.getByText(/fait sans réseau/).waitFor();
+  if (process.env.CAPTURES) await page.screenshot({ path: `${process.env.CAPTURES}/j1.png` });
+
   assert.deepEqual(erreurs, []);
   console.log('E2E APERÇU OK : confirmations utilisables, gestion des utilisateurs visible et essayable');
 } catch (e) {

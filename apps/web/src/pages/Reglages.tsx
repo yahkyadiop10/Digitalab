@@ -21,6 +21,12 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
           <b aria-hidden="true">›</b>
         </a>
       )}
+      {peut(elevage, 'admin.journal') && (
+        <a className="carte ligne" href="#/journal" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <span>Journal d’activité<br /><small className="muet">Qui a fait quoi, et quand</small></span>
+          <b aria-hidden="true">›</b>
+        </a>
+      )}
       {peut(elevage, 'admin.elevage') && (
         <>
           <h2>Mon élevage</h2>

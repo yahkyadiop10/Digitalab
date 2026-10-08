@@ -169,8 +169,19 @@ try {
   await v.page.getByRole('navigation').getByRole('link', { name: /Accueil/ }).click();
   await voir(v.page, /11\s+œufs aujourd’hui/);
 
+  console.log('→ 7 le journal d’activité note qui a fait quoi');
+  await a.page.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
+  await a.page.getByRole('link', { name: /Journal d’activité/ }).click();
+  await a.page.getByRole('heading', { name: 'Journal d’activité' }).waitFor();
+  await voir(a.page, /a ajouté une ponte : 9 œufs/);
+  await voir(a.page, /a ajouté Dr Sy \(Vétérinaire\)/);
+  assert.match(await a.texte(), /a ajouté une opération financière : recette/);
+  // Le vétérinaire n'a pas ce droit : la page lui répond clairement.
+  await v.page.evaluate(() => { window.location.hash = '#/journal'; });
+  await v.page.getByText('Votre profil ne permet pas de consulter le journal d’activité.').waitFor();
+
   assert.deepEqual(erreurs, []);
-  console.log('E2E SYNCHRO OK : compte par code, utilisateur ajouté avec code de connexion, droits appliqués (menus, pages, données non envoyées), saisie partagée, reprise après coupure');
+  console.log('E2E SYNCHRO OK : compte par code, utilisateur ajouté avec code de connexion, droits appliqués (menus, pages, données non envoyées), saisie partagée, reprise après coupure, journal d’activité');
 } catch (e) {
   await a.page.screenshot({ path: new URL('./echec-a.png', import.meta.url).pathname }).catch(() => {});
   await v.page.screenshot({ path: new URL('./echec-v.png', import.meta.url).pathname }).catch(() => {});

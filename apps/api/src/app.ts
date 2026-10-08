@@ -1,9 +1,9 @@
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import {
-  PROFILS_ASSIGNABLES, TABLES_SYNCHRONISEES, aDroit, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, nettoyerDroits, normaliserTelephone, peutAnnuler, peutEcrireTable,
+  LIBELLES_PROFILS, PROFILS_ASSIGNABLES, TABLES_SYNCHRONISEES, aDroit, decrireEnregistrement, determinerAction, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, nettoyerDroits, normaliserTelephone, peutAnnuler, peutEcrireTable,
   peutLireTable, peutValiderDepense, tablesEcrivables,
-  type ChangementSync, type DemandeSync, type DroitsMembre, type ReponseSync, type RoleMembre, type TableSynchronisee,
+  type ActionJournal, type ChangementSync, type DemandeSync, type DroitsMembre, type EntreeJournal, type ReponseSync, type RoleMembre, type TableSynchronisee,
 } from '@digitalab/core';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Config } from './config.js';
@@ -113,6 +113,33 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     const m = await membreDans(organisationId, utilisateurId);
     if (!aDroit(m.droits, code)) throw new ErreurHttp(403, message);
     return m;
+  }
+
+  interface Acteur {
+    id: string;
+    telephone: string;
+    nom: string | null;
+    fonction: string | null;
+  }
+
+  async function acteurDe(organisationId: string, u: Utilisateur): Promise<Acteur> {
+    const r = await pool.query<{ nom: string | null; fonction: string | null }>(
+      'SELECT COALESCE(us.nom, m.nom_affiche) AS nom, m.fonction FROM membres m LEFT JOIN utilisateurs us ON us.id = m.utilisateur_id WHERE m.organisation_id = $1 AND m.utilisateur_id = $2',
+      [organisationId, u.id],
+    );
+    return { id: u.id, telephone: u.telephone, nom: r.rows[0]?.nom ?? u.nom, fonction: r.rows[0]?.fonction ?? null };
+  }
+
+  /** Écrit une ligne du journal (dans la transaction en cours quand on en passe une). */
+  async function journaliser(
+    executeur: { query: (texte: string, valeurs: unknown[]) => Promise<unknown> },
+    organisationId: string, acteur: Acteur, action: ActionJournal, table: string, enregistrementId: string, description: string, faitLe: number,
+  ): Promise<void> {
+    await executeur.query(
+      `INSERT INTO journal (organisation_id, fait_le, utilisateur_id, telephone, nom, fonction, action, table_nom, enregistrement_id, description)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [organisationId, faitLe, acteur.id, acteur.telephone, acteur.nom, acteur.fonction, action, table, enregistrementId, description.slice(0, 300)],
+    );
   }
 
   const limiteAuth = { config: { rateLimit: { max: dep.limiteAuthParMinute ?? 15, timeWindow: '1 minute' } } };
@@ -276,8 +303,8 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     const b = req.body as { telephone: string; role?: RoleMembre; nom?: string; fonction?: string; droits?: string[]; zones?: string[]; nouveauCode?: boolean };
     const telephone = normaliserTelephone(b.telephone);
     if (!telephone) throw new ErreurHttp(400, 'Numéro de téléphone invalide. Exemple : 77 123 45 67.');
-    const existant = (await pool.query<LigneMembre & { utilisateur_id: string | null }>(
-      'SELECT role, fonction, droits, zones, utilisateur_id FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone],
+    const existant = (await pool.query<LigneMembre & { utilisateur_id: string | null; nom_affiche: string | null }>(
+      'SELECT role, fonction, droits, zones, utilisateur_id, nom_affiche FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone],
     )).rows[0];
     if (existant?.role === 'proprietaire') throw new ErreurHttp(400, 'Les droits du propriétaire ne se modifient pas.');
     if (!existant && !b.role && !b.droits) throw new ErreurHttp(400, 'Choisissez un profil ou cochez des droits.');
@@ -303,6 +330,12 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
         code ? new Date(maintenant().getTime() + VALIDITE_INVITATION_JOURS * 86_400_000) : null,
       ],
     );
+    const nomCible = b.nom?.trim() || existant?.nom_affiche || telephone;
+    await journaliser(
+      pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', telephone,
+      `${existant ? 'a modifié les droits de' : 'a ajouté'} ${nomCible}${b.fonction?.trim() ? ` (${b.fonction.trim()})` : ''} · profil ${LIBELLES_PROFILS[role].toLowerCase()}, ${droits.length} fonction${droits.length > 1 ? 's' : ''}${zones.length ? `, ${zones.length} bâtiment${zones.length > 1 ? 's' : ''}` : ''}${code && existant ? ' · nouveau code de connexion' : ''}`,
+      maintenant().getTime(),
+    );
     return { ok: true, telephone, role, ...(code ? { codeInvitation: code } : {}) };
   });
 
@@ -318,6 +351,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     if (!cible) throw new ErreurHttp(404, 'Cette personne ne fait pas partie de l’élevage.');
     if (cible.role === 'proprietaire') throw new ErreurHttp(400, 'Le propriétaire ne peut pas être retiré.');
     await pool.query('DELETE FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone]);
+    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', telephone, `a retiré ${telephone} de l’élevage`, maintenant().getTime());
     return { ok: true };
   });
 
@@ -334,7 +368,38 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     if (!cible) throw new ErreurHttp(404, 'Cette personne ne fait pas partie de l’élevage.');
     if (cible.role === 'proprietaire' && cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas vous déconnecter vous-même ici.');
     const r = cible.utilisateur_id ? await pool.query('DELETE FROM sessions WHERE utilisateur_id = $1', [cible.utilisateur_id]) : { rowCount: 0 };
+    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', telephone, `a déconnecté les appareils de ${telephone}`, maintenant().getTime());
     return { ok: true, appareils: r.rowCount ?? 0 };
+  });
+
+  /* ---------- Journal d'activité ---------- */
+
+  app.get('/v1/organisations/:id/journal', {
+    schema: {
+      ...paramsOrg,
+      querystring: {
+        type: 'object', additionalProperties: false,
+        properties: { avant: { type: 'integer', minimum: 1 }, limite: { type: 'integer', minimum: 1, maximum: 200 }, telephone: { type: 'string', maxLength: 30 }, table: { type: 'string', maxLength: 40 } },
+      },
+    },
+  }, async (req) => {
+    const u = await authentifier(req);
+    const { id } = req.params as { id: string };
+    await exigerDroit(id, u.id, 'admin.journal', 'Vous n’avez pas le droit de consulter le journal d’activité.');
+    const q = req.query as { avant?: number; limite?: number; telephone?: string; table?: string };
+    const limite = q.limite ?? 50;
+    const tel = q.telephone ? normaliserTelephone(q.telephone) : null;
+    const r = await pool.query<{ id: string; fait_le: string; recu_le: Date; telephone: string; nom: string | null; fonction: string | null; action: ActionJournal; table_nom: string; enregistrement_id: string; description: string }>(
+      `SELECT id, fait_le, recu_le, telephone, nom, fonction, action, table_nom, enregistrement_id, description FROM journal
+       WHERE organisation_id = $1 AND ($2::bigint IS NULL OR id < $2) AND ($3::text IS NULL OR telephone = $3) AND ($4::text IS NULL OR table_nom = $4)
+       ORDER BY id DESC LIMIT $5`,
+      [id, q.avant ?? null, tel, q.table ?? null, limite + 1],
+    );
+    const lignes = r.rows.slice(0, limite);
+    const entrees: EntreeJournal[] = lignes.map((x) => ({
+      id: Number(x.id), faitLe: Number(x.fait_le), recuLe: x.recu_le.toISOString(), telephone: x.telephone, nom: x.nom, fonction: x.fonction, action: x.action, table: x.table_nom, enregistrementId: x.enregistrement_id, description: x.description,
+    }));
+    return { entrees, reste: r.rows.length > limite };
   });
 
   /* ---------- Synchronisation ---------- */
@@ -350,15 +415,32 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     },
   } as const;
 
-  /** Conditions SQL (déjà vérifiées, jamais issues de la saisie) pour ne renvoyer que ce que les droits permettent de lire. */
-  function conditionsLecture(droits: string[]): { tables: TableSynchronisee[]; operation: (alias: string) => string } {
+  /**
+   * Conditions SQL (déjà vérifiées, jamais issues de la saisie) pour ne renvoyer que ce que les droits et les bâtiments réservés permettent de lire.
+   * Quand des zones sont données, le paramètre `$5` est la liste des bâtiments et cages autorisés.
+   */
+  function conditionsLecture(droits: string[], zones: string[]): { tables: TableSynchronisee[]; operation: (alias: string) => string; zone: string } {
     const voitDepenses = aUnDroit(droits, ['finances.voir_depenses', 'finances.valider_depense', 'finances.valider_achat', 'finances.valider_paiement', 'finances.payer', 'finances.annuler_depense']);
     const voitRecettes = aUnDroit(droits, ['finances.voir_recettes', 'finances.saisir_facture', 'finances.encaisser', 'finances.annuler_vente']);
     const voitSalaires = aUnDroit(droits, fonctionsDuModule('salaires'));
+    const lotEnZone = (organisation: string, idLot: string) =>
+      `EXISTS (SELECT 1 FROM enregistrements zl WHERE zl.organisation_id = ${organisation} AND zl.table_nom = 'lots' AND zl.id = ${idLot} AND zl.donnees->>'logementId' = ANY($5::text[]))`;
     const operation = (a: string) =>
       `(CASE WHEN ${a}.donnees->>'employeId' IS NOT NULL THEN ${voitSalaires} ` +
-      `WHEN ${a}.donnees->>'sens' = 'depense' THEN ${voitDepenses} WHEN ${a}.donnees->>'sens' = 'recette' THEN ${voitRecettes} ELSE false END)`;
-    return { tables: TABLES_SYNCHRONISEES.filter((t) => peutLireTable(droits, t)), operation };
+      `WHEN ${a}.donnees->>'sens' = 'depense' THEN ${voitDepenses} WHEN ${a}.donnees->>'sens' = 'recette' THEN ${voitRecettes} ELSE false END)` +
+      (zones.length ? ` AND (${a}.donnees->>'lotId' IS NULL OR ${lotEnZone(`${a}.organisation_id`, `${a}.donnees->>'lotId'`)})` : '');
+    const zone = zones.length === 0 ? 'true' : `(CASE e.table_nom
+      WHEN 'logements' THEN e.id = ANY($5::text[])
+      WHEN 'lots' THEN e.donnees->>'logementId' = ANY($5::text[])
+      WHEN 'mouvements' THEN ${lotEnZone('e.organisation_id', "e.donnees->>'lotId'")}
+      WHEN 'pontes' THEN ${lotEnZone('e.organisation_id', "e.donnees->>'lotId'")}
+      WHEN 'distributions' THEN ${lotEnZone('e.organisation_id', "e.donnees->>'lotId'")}
+      WHEN 'evenementsSante' THEN ${lotEnZone('e.organisation_id', "e.donnees->>'lotId'")}
+      WHEN 'quarantaines' THEN (e.donnees->>'logementId' = ANY($5::text[]) OR ${lotEnZone('e.organisation_id', "e.donnees->>'lotId'")})
+      WHEN 'notesQuarantaine' THEN EXISTS (SELECT 1 FROM enregistrements zq WHERE zq.organisation_id = e.organisation_id AND zq.table_nom = 'quarantaines' AND zq.id = e.donnees->>'quarantaineId'
+        AND (zq.donnees->>'logementId' = ANY($5::text[]) OR ${lotEnZone('zq.organisation_id', "zq.donnees->>'lotId'")}))
+      ELSE true END)`;
+    return { tables: TABLES_SYNCHRONISEES.filter((t) => peutLireTable(droits, t)), operation, zone };
   }
 
   app.post('/v1/organisations/:id/sync', {
@@ -381,7 +463,8 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     for (const ch of demande.changements) {
       if (JSON.stringify(ch.enregistrement).length > TAILLE_MAX_ENREGISTREMENT) throw new ErreurHttp(400, 'Un enregistrement est trop volumineux.');
     }
-    const lecture = conditionsLecture(moi.droits);
+    const lecture = conditionsLecture(moi.droits, moi.zones);
+    const acteur = await acteurDe(id, u);
 
     return transaction(pool, async (c) => {
       // Une seule synchronisation à la fois par élevage : l'ordre des numéros de séquence reste celui de validation.
@@ -407,10 +490,36 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
            RETURNING seq`,
           [id, ch.table, e.id, JSON.stringify(e), e.misAJour, e.supprimeLe ?? null],
         );
-        if (r.rowCount === 0) {
+        if (r.rowCount) {
+          await journaliser(c, id, acteur, determinerAction(existant, e), ch.table, e.id, decrireEnregistrement(ch.table, e), e.misAJour);
+        } else {
           // Version égale : déjà connue. Version plus ancienne que celle du serveur : écartée.
           const actuelle = (await c.query<{ mis_a_jour: string }>('SELECT mis_a_jour FROM enregistrements WHERE organisation_id = $1 AND table_nom = $2 AND id = $3', [id, ch.table, e.id])).rows[0];
           if (actuelle && Number(actuelle.mis_a_jour) > e.misAJour) ecartes += 1;
+        }
+      }
+
+      /** Une personne limitée à des bâtiments ne peut écrire que dans ces bâtiments (ou sur leurs lots). */
+      async function dansLesZones(ch: ChangementSync, existant: Record<string, unknown> | undefined): Promise<boolean> {
+        const e = ch.enregistrement;
+        const zones = new Set(moi.zones);
+        const logementOk = (v: unknown) => typeof v === 'string' && zones.has(v);
+        const lotOk = async (idLot: unknown) => typeof idLot === 'string' && logementOk((await donneeDe('lots', idLot))?.['logementId']);
+        switch (ch.table) {
+          case 'logements': return zones.has(e.id);
+          case 'lots': return logementOk(e['logementId']) && (!existant || logementOk(existant['logementId']));
+          case 'mouvements': case 'pontes': case 'distributions': case 'evenementsSante': return lotOk(e['lotId']);
+          case 'quarantaines': return logementOk(e['logementId']) || lotOk(e['lotId']);
+          case 'notesQuarantaine': {
+            const q = typeof e['quarantaineId'] === 'string' ? await donneeDe('quarantaines', e['quarantaineId']) : undefined;
+            return !!q && (logementOk(q['logementId']) || (await lotOk(q['lotId'])));
+          }
+          case 'operations': return e['lotId'] == null || lotOk(e['lotId']);
+          case 'paiements': {
+            const op = typeof e['operationId'] === 'string' ? await donneeDe('operations', e['operationId']) : undefined;
+            return !!op && (op['lotId'] == null || (await lotOk(op['lotId'])));
+          }
+          default: return true;
         }
       }
 
@@ -418,6 +527,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       async function autorise(ch: ChangementSync, existant: Record<string, unknown> | undefined): Promise<boolean> {
         const e = ch.enregistrement;
         if (!peutEcrireTable(moi.droits, ch.table)) return false;
+        if (moi.zones.length > 0 && !(await dansLesZones(ch, existant))) return false;
         if (e.supprimeLe) {
           let sens = e['sens'];
           if (ch.table === 'paiements' && typeof e['operationId'] === 'string') sens = (await donneeDe('operations', e['operationId']))?.['sens'];
@@ -442,11 +552,12 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       const lignes = (await c.query<{ table_nom: ChangementSync['table']; donnees: ChangementSync['enregistrement']; seq: string }>(
         `SELECT e.table_nom, e.donnees, e.seq FROM enregistrements e
          WHERE e.organisation_id = $1 AND e.seq > $2 AND e.table_nom = ANY($3::text[])
+           AND ${lecture.zone} AND $5::text[] IS NOT NULL
            AND (e.table_nom <> 'operations' OR ${lecture.operation('e')})
            AND (e.table_nom <> 'paiements' OR EXISTS (
              SELECT 1 FROM enregistrements o WHERE o.organisation_id = e.organisation_id AND o.table_nom = 'operations' AND o.id = e.donnees->>'operationId' AND ${lecture.operation('o')}))
          ORDER BY e.seq LIMIT $4`,
-        [id, demande.depuisSeq, lecture.tables, LIMITE_REPONSE_SYNC + 1],
+        [id, demande.depuisSeq, lecture.tables, LIMITE_REPONSE_SYNC + 1, moi.zones],
       )).rows;
       const reste = lignes.length > LIMITE_REPONSE_SYNC;
       const gardees = reste ? lignes.slice(0, LIMITE_REPONSE_SYNC) : lignes;

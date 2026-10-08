@@ -1,4 +1,4 @@
-import { PROFILS_ASSIGNABLES, droitsDuProfil, droitsEffectifs, nettoyerDroits, normaliserTelephone, type DroitsMembre, type RoleMembre } from '@digitalab/core';
+import { LIBELLES_PROFILS, PROFILS_ASSIGNABLES, droitsDuProfil, droitsEffectifs, nettoyerDroits, normaliserTelephone, type DroitsMembre, type EntreeJournal, type RoleMembre } from '@digitalab/core';
 
 /**
  * Faux serveur qui vit dans la page : il sert à essayer les comptes et la gestion des utilisateurs dans l'aperçu,
@@ -18,6 +18,24 @@ export function creerServeurDemo() {
   const membres = new Map<string, MembreDemo>();
   const sessions = new Map<string, string>();
   const organisation = { id: 'org-demonstration', nom: 'Mon élevage' };
+  const journal: EntreeJournal[] = [];
+  const noter = (acteur: MembreDemo, action: EntreeJournal['action'], table: string, description: string, ilYaMinutes = 0, horsLigne = 0) => {
+    const maintenant = Date.now() - ilYaMinutes * 60_000;
+    journal.unshift({
+      id: journal.length + 1, faitLe: maintenant - horsLigne * 60_000, recuLe: new Date(maintenant).toISOString(), telephone: acteur.telephone, nom: acteur.nom, fonction: acteur.fonction ?? null,
+      action, table, enregistrementId: `demo-${journal.length + 1}`, description,
+    });
+  };
+  /** Quelques lignes d'exemple, pour montrer à quoi ressemble le journal. */
+  const amorcer = (patron: MembreDemo) => {
+    const awa: MembreDemo = { telephone: '+221771110001', nom: 'Awa Fall', fonction: 'Aide', actif: true, role: 'soigneur', droits: [], zones: [] };
+    noter(awa, 'creation', 'pontes', '48 œufs', 190);
+    noter(awa, 'creation', 'distributions', '12 kg', 185);
+    noter(awa, 'creation', 'mouvements', 'décès · 2 animaux', 140);
+    noter(patron, 'creation', 'operations', 'recette · 45\u00a0000\u00a0FCFA · Boutique Awa · F-2026-0001', 95);
+    noter(awa, 'annulation', 'mouvements', 'décès · 2 animaux', 60);
+    noter(awa, 'creation', 'pontes', '51 œufs', 30, 240);
+  };
 
   const repondre = (statut: number, corps: unknown) => new Response(JSON.stringify(corps), { status: statut, headers: { 'content-type': 'application/json' } });
   const erreur = (statut: number, message: string) => repondre(statut, { erreur: message });
@@ -50,6 +68,7 @@ export function creerServeurDemo() {
         if (!m && membres.size === 0) {
           m = { telephone: tel, nom: null, actif: true, role: 'proprietaire', droits: droitsEffectifs('proprietaire', null), zones: [] };
           membres.set(tel, m);
+          amorcer(m);
         }
         if (!m) return erreur(400, 'Démonstration : ce numéro n’a pas été ajouté. Utilisez le code donné par l’administrateur.');
         m.actif = true;
@@ -67,6 +86,10 @@ export function creerServeurDemo() {
     }
 
     if (!moiMembre) return erreur(401, 'Session expirée. Reconnectez-vous.');
+    if (chemin === '/v1/moi' && methode === 'PATCH') {
+      moiMembre.nom = String(corps['nom'] ?? '').trim() || null;
+      return repondre(200, { ok: true });
+    }
     const estAdmin = moiMembre.droits.includes('admin.utilisateurs');
 
     if (/^\/v1\/organisations\/[^/]+\/sync$/.test(chemin)) {
@@ -77,6 +100,15 @@ export function creerServeurDemo() {
       if (!moiMembre.droits.includes('admin.elevage')) return erreur(403, 'Vous n’avez pas le droit de modifier les informations de l’élevage.');
       organisation.nom = String(corps['nom'] ?? organisation.nom);
       return repondre(200, { ok: true });
+    }
+
+    if (/^\/v1\/organisations\/[^/]+\/journal$/.test(chemin)) {
+      if (!moiMembre.droits.includes('admin.journal')) return erreur(403, 'Vous n’avez pas le droit de consulter le journal d’activité.');
+      const avant = Number(url.searchParams.get('avant')) || Infinity;
+      const tel = url.searchParams.get('telephone');
+      const limite = Number(url.searchParams.get('limite')) || 50;
+      const choisies = journal.filter((x) => x.id < avant && (!tel || x.telephone === normaliserTelephone(tel)));
+      return repondre(200, { entrees: choisies.slice(0, limite), reste: choisies.length > limite });
     }
 
     const m = chemin.match(/^\/v1\/organisations\/[^/]+\/membres(?:\/([^/]+)(\/deconnexion)?)?$/);
@@ -91,10 +123,12 @@ export function creerServeurDemo() {
       if (methode === 'DELETE' && cible) {
         if (membres.get(cible)?.role === 'proprietaire') return erreur(400, 'Le propriétaire ne peut pas être retiré.');
         membres.delete(cible);
+        noter(moiMembre, 'utilisateur', 'utilisateurs', `a retiré ${cible} de l’élevage`);
         return repondre(200, { ok: true });
       }
       if (methode === 'POST' && cible && m[2]) {
         for (const [j, t] of sessions) if (t === cible) sessions.delete(j);
+        noter(moiMembre, 'utilisateur', 'utilisateurs', `a déconnecté les appareils de ${cible}`);
         return repondre(200, { ok: true });
       }
       if (methode === 'POST' && !m[1]) {
@@ -122,6 +156,7 @@ export function creerServeurDemo() {
           fiche.codeInvitation = codeInvitation;
         }
         membres.set(tel, fiche);
+        noter(moiMembre, 'utilisateur', 'utilisateurs', `${existant ? 'a modifié les droits de' : 'a ajouté'} ${fiche.nom ?? tel}${fonction ? ` (${fonction})` : ''} · profil ${LIBELLES_PROFILS[role].toLowerCase()}, ${droits.length} fonction${droits.length > 1 ? 's' : ''}`);
         return repondre(200, { ok: true, telephone: tel, role, ...(codeInvitation ? { codeInvitation } : {}) });
       }
     }

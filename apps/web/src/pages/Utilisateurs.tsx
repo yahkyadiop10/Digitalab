@@ -219,7 +219,7 @@ function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage
         <label className="case"><input type="checkbox" checked={toute} onChange={(e) => setToute(e.target.checked)} /> Toute la ferme</label>
         {!toute && (
           <>
-            <p className="muet">Cette personne ne verra que les animaux et la production de ces bâtiments et cages.</p>
+            <p className="muet">Le serveur n’enverra à cette personne que les animaux, la production et les saisies de ces bâtiments et cages, et refusera toute saisie ailleurs.</p>
             {elevage.donnees.logements.length === 0 && <p className="muet">Aucun bâtiment n’est encore créé (Réglages › Mes locaux).</p>}
             {elevage.donnees.logements.map((l) => (
               <label key={l.id} className="case">
