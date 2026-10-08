@@ -7,5 +7,6 @@ export * from './incubation';
 export * from './parametres';
 export * from './quarantaine';
 export * from './sante';
+export * from './sync';
 export * from './tableau';
 export * from './types';

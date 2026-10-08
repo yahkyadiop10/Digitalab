@@ -146,7 +146,7 @@ export function Retour({ vers, libelle = 'Retour' }: { vers: string; libelle?: s
 }
 
 /** Boutons de l'en-tête : alertes (avec compteur) et réglages. */
-export function OutilsEntete({ nbAlertes }: { nbAlertes: number }) {
+export function OutilsEntete({ nbAlertes, compte = null }: { nbAlertes: number; compte?: { erreur: boolean } | null }) {
   const { segments } = useRoute();
   const actif = segments[0];
   return (
@@ -156,6 +156,12 @@ export function OutilsEntete({ nbAlertes }: { nbAlertes: number }) {
         {nbAlertes > 0 && <i className="pastille">{nbAlertes}</i>}
       </a>
       <a href="#/finances" aria-label="Finances" className={`mobile${actif === 'finances' ? ' actif' : ''}`}><span aria-hidden="true">💰</span></a>
+      {compte && (
+        <a href="#/compte" aria-label={compte.erreur ? 'Compte et synchronisation : action requise' : 'Compte et synchronisation'} className={actif === 'compte' ? 'actif' : ''}>
+          <span aria-hidden="true">☁️</span>
+          {compte.erreur && <i className="pastille">!</i>}
+        </a>
+      )}
       <a href="#/reglages" aria-label="Réglages" className={actif === 'reglages' ? 'actif' : ''}><span aria-hidden="true">⚙️</span></a>
     </div>
   );

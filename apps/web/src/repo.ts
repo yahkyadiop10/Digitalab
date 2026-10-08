@@ -9,7 +9,10 @@ export const nouvelId = (): string =>
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-const maintenant = () => Date.now();
+// Strictement croissant sur l'appareil : deux modifications d'une même fiche ne portent jamais le même instant,
+// sinon la synchronisation (la plus récente l'emporte) pourrait garder la mauvaise.
+let dernierInstant = 0;
+const maintenant = () => (dernierInstant = Math.max(Date.now(), dernierInstant + 1));
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
 export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations' | 'notesQuarantaine';
@@ -58,6 +61,11 @@ export function creerRepo(base: BaseElevage = db) {
     const id = nouvelId();
     await base.mouvements.add({ id, misAJour: maintenant(), lotId, type, quantite, date: extra.date ?? aujourdhui(), ...(extra.cause ? { cause: extra.cause } : {}), ...(extra.note ? { note: extra.note } : {}) });
     return { table: 'mouvements', id };
+  };
+
+  /** Après une restauration ou un effacement, la prochaine synchronisation renvoie et reprend tout. */
+  const repartirDeZero = async () => {
+    await base.connexion.where('cle').equals('serveur').modify({ derniereSeq: 0, dernierEnvoi: 0 });
   };
 
   return {
@@ -488,12 +496,14 @@ export function creerRepo(base: BaseElevage = db) {
           if (Array.isArray(lignes) && lignes.length) await base.table(t).bulkAdd(lignes);
         }
       });
+      await repartirDeZero();
     },
 
     async toutEffacer(): Promise<void> {
       await base.transaction('rw', TABLES_DONNEES.map((t) => base.table(t)), async () => {
         for (const t of TABLES_DONNEES) await base.table(t).clear();
       });
+      await repartirDeZero();
     },
   };
 }

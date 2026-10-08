@@ -10,9 +10,11 @@ import { FicheQuarantaine, FormArrivee, PageQuarantaine } from './pages/Quaranta
 import { FormOperation, PageFinances } from './pages/Finances';
 import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
 import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
+import { PageCompte, useConnexion } from './pages/Compte';
 import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
 import { useRoute } from './route';
+import { synchro } from './sync';
 import { useElevage, type Elevage } from './useElevage';
 
 function Page({ elevage }: { elevage: Elevage }) {
@@ -47,6 +49,8 @@ function Page({ elevage }: { elevage: Elevage }) {
       return <PageFinances elevage={elevage} />;
     case 'alertes':
       return <Alertes elevage={elevage} />;
+    case 'compte':
+      return <PageCompte />;
     case 'reglages':
       return <Reglages elevage={elevage} />;
     default:
@@ -66,6 +70,10 @@ export const App = Racine;
 function Application() {
   const elevage = useElevage();
   const [stockageBloque, setStockageBloque] = useState(false);
+  const route = useRoute();
+  const connexion = useConnexion();
+  const relie = Boolean(connexion);
+  useEffect(() => (relie ? synchro.demarrerAuto() : undefined), [relie]);
   useEffect(() => {
     db.open().catch(() => setStockageBloque(true));
   }, []);
@@ -79,6 +87,7 @@ function Application() {
   }
   if (!elevage) return <p className="chargement">Chargement…</p>;
   if (!elevage.reglages.demarrageFait && elevage.donnees.lots.length === 0) {
+    if (route.segments[0] === 'compte') return <FournisseurNotif><main><PageCompte /></main></FournisseurNotif>;
     return <FournisseurNotif><Demarrage /></FournisseurNotif>;
   }
   const nbAlertes = elevage.alertes.filter((a) => !a.priseEnCharge).length;
@@ -87,7 +96,7 @@ function Application() {
       <header>
         <h1>Digitalab</h1>
         <small>{elevage.reglages.nomElevage || 'Mon élevage'}</small>
-        <OutilsEntete nbAlertes={nbAlertes} />
+        <OutilsEntete nbAlertes={nbAlertes} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
       </header>
       <main>
         <Page elevage={elevage} />

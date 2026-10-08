@@ -2,6 +2,7 @@ import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { SEUILS_PAR_DEFAUT, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
 import { Champ, useNotifier, versNombre } from '../components/ui';
 import { chargerDemo } from '../demo';
+import { depuisQuand, useConnexion } from './Compte';
 import { TYPES_LOGEMENT } from '../i18n/fr';
 import { ErreurSaisie, repo } from '../repo';
 import type { Elevage } from '../useElevage';
@@ -9,6 +10,8 @@ import type { Elevage } from '../useElevage';
 export function Reglages({ elevage }: { elevage: Elevage }) {
   return (
     <>
+      <h2>Compte et équipe</h2>
+      <CarteCompte />
       <h2>Mon élevage</h2>
       <NomElevage nom={elevage.reglages.nomElevage} />
       <h2>Mes locaux</h2>
@@ -19,9 +22,23 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
       <Donnees />
       <h2>À propos</h2>
       <div className="carte muet">
-        Digitalab, version de travail (phase 1). Vos données restent sur cet appareil ; faites régulièrement une sauvegarde. L’application fonctionne sans connexion une fois chargée.
+        Digitalab, version de travail (phase 1). Vos données restent sur cet appareil (et sur le serveur si vous avez relié un compte) ; faites régulièrement une sauvegarde. L’application fonctionne sans connexion une fois chargée.
       </div>
     </>
+  );
+}
+
+function CarteCompte() {
+  const connexion = useConnexion();
+  return (
+    <a className="carte ligne" href="#/compte" style={{ textDecoration: 'none', color: 'inherit' }}>
+      <span>
+        {connexion ? `Relié à « ${connexion.organisationNom} »` : 'Partager avec mes aides et mon vétérinaire'}
+        <br />
+        <small className="muet">{connexion ? `Dernière synchronisation : ${depuisQuand(connexion.derniereSync)}` : 'Créer un compte et synchroniser plusieurs téléphones'}</small>
+      </span>
+      <b aria-hidden="true">›</b>
+    </a>
   );
 }
 
@@ -162,7 +179,7 @@ function Donnees() {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
-    if (!window.confirm('Remplacer toutes les données actuelles par cette sauvegarde ?')) return;
+    if (!window.confirm('Remplacer toutes les données actuelles par cette sauvegarde ? Si un compte est relié, les fiches plus récentes du serveur reviendront à la prochaine synchronisation.')) return;
     try {
       await repo.importer(await f.text());
       notifier('Sauvegarde restaurée ✓');
@@ -179,7 +196,7 @@ function Donnees() {
       </label>
       <div className="actions">
         <button className="lien" onClick={async () => { if (window.confirm('Ajouter des données d’exemple à votre élevage ?')) { await chargerDemo(); notifier('Exemple chargé'); } }}>Ajouter des données d’exemple</button>
-        <button className="lien danger" onClick={async () => { if (window.confirm('Effacer toutes les données de cet appareil ? Cette action est définitive.')) { await repo.toutEffacer(); notifier('Données effacées'); } }}>Tout effacer</button>
+        <button className="lien danger" onClick={async () => { if (window.confirm('Effacer toutes les données de cet appareil ? Si un compte est relié, elles reviendront depuis le serveur à la prochaine synchronisation.')) { await repo.toutEffacer(); notifier('Données effacées'); } }}>Tout effacer</button>
       </div>
     </div>
   );

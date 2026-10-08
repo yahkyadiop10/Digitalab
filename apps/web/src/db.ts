@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { OperationFinanciere, Couveuse, Distribution, EntreeStock, EvenementSante, Incubation, Logement, Lot, Mirage, Mouvement, NoteQuarantaine, Ponte, Quarantaine } from '@digitalab/core';
+import type { RoleMembre, OperationFinanciere, Couveuse, Distribution, EntreeStock, EvenementSante, Incubation, Logement, Lot, Mirage, Mouvement, NoteQuarantaine, Ponte, Quarantaine } from '@digitalab/core';
 
 export interface Reglage {
   cle: string;
@@ -12,6 +12,24 @@ export interface EtatAlerte {
   statut: 'prise_en_charge' | 'reportee';
   /** Pour « reportée » : instant (ms) jusqu'auquel l'alerte reste masquée. */
   jusqua?: number;
+}
+
+/** Lien de cet appareil avec le serveur (compte, élevage choisi, avancement de la synchronisation). Jamais sauvegardé ni synchronisé. */
+export interface Connexion {
+  cle: 'serveur';
+  url: string;
+  jeton: string;
+  telephone: string;
+  organisationId: string;
+  organisationNom: string;
+  role: RoleMembre;
+  /** Dernier numéro de séquence reçu du serveur. */
+  derniereSeq: number;
+  /** Début de la dernière synchronisation réussie : seules les modifications plus récentes sont envoyées. */
+  dernierEnvoi: number;
+  derniereSync?: number;
+  /** Dernier refus du serveur (session expirée, accès retiré…) ; effacé à la prochaine réussite. */
+  erreur?: string;
 }
 
 export class BaseElevage extends Dexie {
@@ -29,6 +47,7 @@ export class BaseElevage extends Dexie {
   quarantaines!: Table<Quarantaine, string>;
   notesQuarantaine!: Table<NoteQuarantaine, string>;
   reglages!: Table<Reglage, string>;
+  connexion!: Table<Connexion, string>;
   etatsAlertes!: Table<EtatAlerte, string>;
 
   constructor(nom = 'digitalab') {
@@ -57,6 +76,9 @@ export class BaseElevage extends Dexie {
     this.version(5).stores({
       quarantaines: 'id, lotId',
       notesQuarantaine: 'id, quarantaineId, date',
+    });
+    this.version(6).stores({
+      connexion: 'cle',
     });
   }
 }

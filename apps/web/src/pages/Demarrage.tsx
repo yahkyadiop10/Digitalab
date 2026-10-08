@@ -61,6 +61,7 @@ export function Demarrage() {
       <div className="actions">
         <button className="lien" onClick={() => void chargerDemo()}>Essayer avec des données d’exemple</button>
         <button className="lien" onClick={() => void repo.ecrireReglage('demarrageFait', true)}>Passer</button>
+        <a className="lien" href="#/compte">J’ai déjà un compte : retrouver mon élevage</a>
       </div>
     </main>
   );
