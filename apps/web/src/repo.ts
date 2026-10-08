@@ -1,4 +1,4 @@
-import { effectifs, jourLocal, MODES_PAIEMENT, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { effectifs, jourLocal, MODES_PAIEMENT, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -324,6 +324,8 @@ export function creerRepo(base: BaseElevage = db) {
       sens: SensOperation; categorie: string; montant?: number; date?: Jour; lotId?: string | null; tiers?: string; telephoneTiers?: string; paye?: boolean; note?: string;
       lignes?: LigneDocument[]; remise?: number; numero?: string; echeance?: Jour; acompte?: number; mode?: ModePaiement;
       employeId?: string; periode?: string; nature?: NatureSalaire;
+      /** Saisi par quelqu'un qui ne peut pas valider : la dépense et son paiement attendent un responsable. */
+      aValider?: boolean; paiementAValider?: boolean;
     }): Promise<Annulation> {
       const lignes = (d.lignes ?? []).filter((l) => l.libelle.trim() || l.quantite || l.prixUnitaire);
       for (const l of lignes) {
@@ -372,14 +374,15 @@ export function creerRepo(base: BaseElevage = db) {
           ...(d.employeId ? { employeId: d.employeId } : {}),
           ...(d.periode ? { periode: d.periode } : {}),
           ...(d.nature ? { nature: d.nature } : {}),
+          ...(d.aValider ? { statut: 'a_valider' as const } : {}),
         });
-        if (acompte > 0) await base.paiements.add({ id: nouvelId(), misAJour: maintenant(), operationId: id, date, montant: acompte, mode });
+        if (acompte > 0) await base.paiements.add({ id: nouvelId(), misAJour: maintenant(), operationId: id, date, montant: acompte, mode, ...(d.paiementAValider ? { statut: 'a_valider' as const } : {}) });
       });
       return { table: 'operations', id };
     },
 
     /** Enregistre un règlement (acompte ou solde) sur une facture ou une dépense. */
-    async ajouterPaiement(operationId: string, montant: number, mode: ModePaiement, date?: Jour): Promise<Annulation> {
+    async ajouterPaiement(operationId: string, montant: number, mode: ModePaiement, date?: Jour, aValider = false): Promise<Annulation> {
       const op = await base.operations.get(operationId);
       if (!op || op.supprimeLe) throw new ErreurSaisie('Opération introuvable.');
       if (!Number.isInteger(montant) || montant <= 0) throw new ErreurSaisie('Montant : entrez un nombre entier de FCFA supérieur à zéro.');
@@ -389,8 +392,24 @@ export function creerRepo(base: BaseElevage = db) {
       const { reste } = reglement(op, await base.paiements.where('operationId').equals(operationId).toArray());
       if (montant > reste) throw new ErreurSaisie(reste === 0 ? 'Cette opération est déjà entièrement réglée.' : `Il ne reste que ${reste} FCFA à régler.`);
       const id = nouvelId();
-      await base.paiements.add({ id, misAJour: maintenant(), operationId, date: jour, montant, mode });
+      await base.paiements.add({ id, misAJour: maintenant(), operationId, date: jour, montant, mode, ...(aValider ? { statut: 'a_valider' as const } : {}) });
       return { table: 'paiements', id };
+    },
+
+    /** Un responsable valide une dépense ou un paiement saisi par quelqu'un d'autre. */
+    async valider(a: { table: 'operations' | 'paiements'; id: string }): Promise<void> {
+      await base.table(a.table).update(a.id, { statut: 'validee', misAJour: maintenant() });
+    },
+
+    /** Informations imprimées sur les factures et logo : une seule fiche, partagée entre les appareils. */
+    async enregistrerProfil(d: { adresse?: string; telephone?: string; ninea?: string; logo?: string | null; nom?: string }): Promise<void> {
+      if (d.logo && d.logo.length > 40_000) throw new ErreurSaisie('Ce logo est trop lourd. Choisissez une image plus petite.');
+      const actuel = await base.profil.get('elevage');
+      const suite: Record<string, unknown> = {};
+      for (const cle of ['nom', 'adresse', 'telephone', 'ninea'] as const) if (d[cle] !== undefined) suite[cle] = d[cle]!.trim();
+      if (d.logo === null) suite['logo'] = undefined;
+      else if (d.logo) suite['logo'] = d.logo;
+      await base.profil.put({ ...(actuel ?? {}), ...suite, id: 'elevage', misAJour: maintenant() } as ProfilElevage);
     },
 
     /** Règle d'un coup tout ce qui reste sur une opération. */

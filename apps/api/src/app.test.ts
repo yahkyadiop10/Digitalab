@@ -244,18 +244,21 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect(tours).toBe(2);
     });
 
-    it('refuse les rôles en lecture quand ils envoient des modifications, mais leur laisse lire', async () => {
+    it('le lecteur est refusé s’il envoie des modifications, mais peut lire ; le vétérinaire ne peut écrire que dans la santé', async () => {
       const patron = await seConnecter(banc, '77 300 00 08');
       await sync(patron, 0, [enreg('lots', 'l1', MAINTENANT, { nom: 'Soie' })]);
-      for (const [tel, role] of [['77 300 00 09', 'veterinaire'], ['77 300 00 10', 'lecteur']] as const) {
-        await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: tel, role }, patron);
-        const lecteur = await seConnecter(banc, tel);
-        const lecture: ReponseSync = (await sync(lecteur, 0, [], patron.organisationId)).json();
-        expect(lecture.changements).toHaveLength(1);
-        const ecriture = await sync(lecteur, 0, [enreg('lots', 'l2', MAINTENANT)], patron.organisationId);
-        expect(ecriture.statusCode).toBe(403);
-      }
-      expect((await sync(patron, 0)).json().changements).toHaveLength(1);
+      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 300 00 10', role: 'lecteur' }, patron);
+      const lecteur = await seConnecter(banc, '77 300 00 10');
+      expect(((await sync(lecteur, 0, [], patron.organisationId)).json() as ReponseSync).changements).toHaveLength(1);
+      expect((await sync(lecteur, 0, [enreg('lots', 'l2', MAINTENANT)], patron.organisationId)).statusCode).toBe(403);
+
+      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 300 00 09', role: 'veterinaire' }, patron);
+      const veto = await seConnecter(banc, '77 300 00 09');
+      const r: ReponseSync = (await sync(veto, 0, [enreg('lots', 'l3', MAINTENANT), enreg('evenementsSante', 's1', MAINTENANT, { lotId: 'l1' })], patron.organisationId)).json();
+      expect(r.refuses).toBe(1);
+      const vu: ReponseSync = (await sync(patron, 0)).json();
+      expect(vu.changements.map((c) => c.enregistrement.id).sort()).toEqual(['l1', 's1']);
+      expect((await sync(patron, 0)).json().changements).toHaveLength(2);
     });
 
     it('laisse un soigneur écrire', async () => {
@@ -301,6 +304,173 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
   it('répond sur /v1/sante', async () => {
     expect((await get('/v1/sante')).json()).toEqual({ ok: true });
   });
+
+  describe('droits fins, invitations et validation', () => {
+    const inviter = (patron: Session, corps: Record<string, unknown>) => post(`/v1/organisations/${patron.organisationId}/membres`, corps, patron);
+
+    it('renvoie un code d’invitation à usage unique, qui permet de se connecter sans SMS', async () => {
+      const patron = await seConnecter(banc, '77 400 00 01');
+      const inv = (await inviter(patron, { telephone: '77 400 00 02', role: 'soigneur', fonction: 'Responsable bâtiment A', nom: 'Moussa' })).json();
+      expect(inv.codeInvitation).toMatch(/^\d{6}$/);
+      const liste = (await get(`/v1/organisations/${patron.organisationId}/membres`, patron)).json().membres;
+      expect(liste.find((m: { telephone: string }) => m.telephone === '+221774000002')).toMatchObject({ nom: 'Moussa', fonction: 'Responsable bâtiment A', invitationEnCours: true, actif: false });
+
+      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 02', code: '000000' })).statusCode).toBe(400);
+      const ok = await post('/v1/auth/connexion', { telephone: '77 400 00 02', code: inv.codeInvitation });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().organisations[0]).toMatchObject({ id: patron.organisationId, role: 'soigneur', fonction: 'Responsable bâtiment A' });
+      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 02', code: inv.codeInvitation })).statusCode).toBe(400);
+    });
+
+    it('bloque les essais répétés et refuse une invitation périmée', async () => {
+      const patron = await seConnecter(banc, '77 400 00 03');
+      const inv = (await inviter(patron, { telephone: '77 400 00 04', role: 'lecteur' })).json();
+      for (let i = 0; i < 5; i++) expect((await post('/v1/auth/connexion', { telephone: '77 400 00 04', code: '111111' })).statusCode).toBe(400);
+      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 04', code: inv.codeInvitation })).statusCode).toBe(429);
+      const inv2 = (await inviter(patron, { telephone: '77 400 00 04', nouveauCode: true })).json();
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 8 * 86_400_000);
+      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 04', code: inv2.codeInvitation })).statusCode).toBe(400);
+    });
+
+    it('un soigneur ne voit pas les finances ni les salaires, un caissier voit les ventes mais pas les dépenses', async () => {
+      const patron = await seConnecter(banc, '77 400 00 05');
+      await sync(patron, 0, [
+        enreg('operations', 'o-dep', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 100 }),
+        enreg('operations', 'o-rec', MAINTENANT, { sens: 'recette', categorie: 'oeufs', montant: 200 }),
+        enreg('operations', 'o-sal', MAINTENANT, { sens: 'depense', categorie: 'main_oeuvre', montant: 300, employeId: 'e1' }),
+        enreg('paiements', 'p-dep', MAINTENANT, { operationId: 'o-dep', montant: 100 }),
+        enreg('paiements', 'p-rec', MAINTENANT, { operationId: 'o-rec', montant: 200 }),
+        enreg('paiements', 'p-sal', MAINTENANT, { operationId: 'o-sal', montant: 300 }),
+        enreg('employes', 'e1', MAINTENANT, { nom: 'Moussa', salaire: 45000 }),
+        enreg('pontes', 'po1', MAINTENANT, { nombre: 5 }),
+      ]);
+      const ids = async (s: Session) => ((await sync(s, 0, [], patron.organisationId)).json() as ReponseSync).changements.map((c) => c.enregistrement.id).sort();
+
+      await inviter(patron, { telephone: '77 400 00 06', role: 'soigneur' });
+      expect(await ids(await seConnecter(banc, '77 400 00 06'))).toEqual(['po1']);
+      await inviter(patron, { telephone: '77 400 00 07', role: 'caissier' });
+      expect(await ids(await seConnecter(banc, '77 400 00 07'))).toEqual(['o-rec', 'p-rec', 'po1']);
+      await inviter(patron, { telephone: '77 400 00 08', role: 'personnalise', droits: ['finances.voir_depenses'] });
+      expect(await ids(await seConnecter(banc, '77 400 00 08'))).toEqual(['o-dep', 'p-dep']);
+      await inviter(patron, { telephone: '77 400 00 09', role: 'personnalise', droits: ['salaires.voir'] });
+      expect(await ids(await seConnecter(banc, '77 400 00 09'))).toEqual(['e1', 'o-sal', 'p-sal']);
+    });
+
+    it('n’accepte que les écritures permises par les droits cochés', async () => {
+      const patron = await seConnecter(banc, '77 400 00 10');
+      await inviter(patron, { telephone: '77 400 00 11', role: 'personnalise', droits: ['saisie.ponte', 'cheptel.voir'] });
+      const aide = await seConnecter(banc, '77 400 00 11');
+      const r: ReponseSync = (await sync(aide, 0, [enreg('pontes', 'a', MAINTENANT, { nombre: 3 }), enreg('distributions', 'b', MAINTENANT), enreg('operations', 'c', MAINTENANT, { sens: 'recette' })], patron.organisationId)).json();
+      expect(r.refuses).toBe(2);
+      expect(r.moi.droits.sort()).toEqual(['cheptel.voir', 'saisie.ponte']);
+      expect(((await sync(patron, 0)).json() as ReponseSync).changements.map((c) => c.enregistrement.id)).toEqual(['a']);
+    });
+
+    it('annuler une saisie demande le droit d’annuler', async () => {
+      const patron = await seConnecter(banc, '77 400 00 12');
+      await sync(patron, 0, [enreg('pontes', 'x', MAINTENANT, { nombre: 3 })]);
+      await inviter(patron, { telephone: '77 400 00 13', role: 'personnalise', droits: ['saisie.ponte'] });
+      await inviter(patron, { telephone: '77 400 00 14', role: 'personnalise', droits: ['saisie.ponte', 'saisie.annuler'] });
+      const sans = await seConnecter(banc, '77 400 00 13');
+      const avec = await seConnecter(banc, '77 400 00 14');
+      const annulation = (t: number) => enreg('pontes', 'x', MAINTENANT + t, { nombre: 3, supprimeLe: MAINTENANT + t });
+      expect(((await sync(sans, 0, [annulation(1)], patron.organisationId)).json() as ReponseSync).refuses).toBe(1);
+      expect(((await sync(avec, 0, [annulation(2)], patron.organisationId)).json() as ReponseSync).refuses).toBe(0);
+    });
+
+    it('annuler une dépense et annuler une vente sont deux droits distincts', async () => {
+      const patron = await seConnecter(banc, '77 400 00 15');
+      await sync(patron, 0, [
+        enreg('operations', 'd', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 1 }),
+        enreg('operations', 'v', MAINTENANT, { sens: 'recette', categorie: 'oeufs', montant: 1 }),
+      ]);
+      await inviter(patron, { telephone: '77 400 00 16', role: 'personnalise', droits: ['finances.saisir_depense', 'finances.saisir_facture', 'finances.annuler_depense', 'finances.voir_depenses', 'finances.voir_recettes'] });
+      const g = await seConnecter(banc, '77 400 00 16');
+      const r: ReponseSync = (await sync(g, 0, [
+        enreg('operations', 'd', MAINTENANT + 1, { sens: 'depense', categorie: 'soins', montant: 1, supprimeLe: MAINTENANT + 1, statut: 'a_valider' }),
+        enreg('operations', 'v', MAINTENANT + 1, { sens: 'recette', categorie: 'oeufs', montant: 1, supprimeLe: MAINTENANT + 1 }),
+      ], patron.organisationId)).json();
+      expect(r.refuses).toBe(1);
+    });
+
+    it('une dépense ne devient « validée » que par une personne autorisée', async () => {
+      const patron = await seConnecter(banc, '77 400 00 17');
+      await inviter(patron, { telephone: '77 400 00 18', role: 'personnalise', droits: ['finances.saisir_depense'] });
+      await inviter(patron, { telephone: '77 400 00 19', role: 'personnalise', droits: ['finances.valider_depense', 'finances.voir_depenses'] });
+      await inviter(patron, { telephone: '77 400 00 20', role: 'personnalise', droits: ['finances.valider_achat', 'finances.voir_depenses'] });
+      const saisisseur = await seConnecter(banc, '77 400 00 18');
+      const validateur = await seConnecter(banc, '77 400 00 19');
+      const acheteur = await seConnecter(banc, '77 400 00 20');
+      const org = patron.organisationId;
+      const aValider = (id: string, categorie: string, t = 0) => enreg('operations', id, MAINTENANT + t, { sens: 'depense', categorie, montant: 5000, statut: 'a_valider' });
+      const validee = (id: string, categorie: string, t: number) => enreg('operations', id, MAINTENANT + t, { sens: 'depense', categorie, montant: 5000, statut: 'validee' });
+
+      expect(((await sync(saisisseur, 0, [aValider('d1', 'soins'), aValider('d2', 'materiel')], org)).json() as ReponseSync).refuses).toBe(0);
+      // Se valider soi-même est refusé.
+      expect(((await sync(saisisseur, 0, [validee('d1', 'soins', 5)], org)).json() as ReponseSync).refuses).toBe(1);
+      // Une dépense ordinaire se valide avec le droit « dépenses », un achat avec le droit « achats ».
+      expect(((await sync(validateur, 0, [validee('d1', 'soins', 6), validee('d2', 'materiel', 6)], org)).json() as ReponseSync).refuses).toBe(1);
+      expect(((await sync(acheteur, 0, [validee('d2', 'materiel', 7)], org)).json() as ReponseSync).refuses).toBe(0);
+    });
+
+    it('un paiement de dépense doit être validé par une personne autorisée', async () => {
+      const patron = await seConnecter(banc, '77 400 00 21');
+      await sync(patron, 0, [enreg('operations', 'dd', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 10 })]);
+      await inviter(patron, { telephone: '77 400 00 22', role: 'personnalise', droits: ['finances.payer', 'finances.voir_depenses'] });
+      const payeur = await seConnecter(banc, '77 400 00 22');
+      const enAttente = (t: number) => enreg('paiements', 'pp', MAINTENANT + t, { operationId: 'dd', montant: 10, statut: 'a_valider' });
+      const valide = (t: number) => enreg('paiements', 'pp', MAINTENANT + t, { operationId: 'dd', montant: 10, statut: 'validee' });
+      expect(((await sync(payeur, 0, [enAttente(1)], patron.organisationId)).json() as ReponseSync).refuses).toBe(0);
+      expect(((await sync(payeur, 0, [valide(2)], patron.organisationId)).json() as ReponseSync).refuses).toBe(1);
+      expect(((await sync(patron, 0, [valide(3)])).json() as ReponseSync).refuses).toBe(0);
+    });
+
+    it('la gestion des utilisateurs est un droit : un gérant ne peut pas se l’accorder, un délégué ne peut pas la transmettre', async () => {
+      const patron = await seConnecter(banc, '77 400 00 23');
+      await inviter(patron, { telephone: '77 400 00 24', role: 'gerant' });
+      const gerant = await seConnecter(banc, '77 400 00 24');
+      const org = patron.organisationId;
+      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 25', role: 'lecteur' }, gerant)).statusCode).toBe(403);
+      expect((await get(`/v1/organisations/${org}/membres`, gerant)).statusCode).toBe(403);
+
+      await inviter(patron, { telephone: '77 400 00 26', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
+      const delegue = await seConnecter(banc, '77 400 00 26');
+      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 27', role: 'lecteur' }, delegue)).statusCode).toBe(200);
+      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 28', role: 'personnalise', droits: ['admin.utilisateurs'] }, delegue)).statusCode).toBe(403);
+      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 24', role: 'lecteur' }, delegue)).statusCode).toBe(200);
+    });
+
+    it('modifie les droits d’une personne, qui les voit à la synchronisation suivante', async () => {
+      const patron = await seConnecter(banc, '77 400 00 29');
+      await inviter(patron, { telephone: '77 400 00 30', role: 'lecteur' });
+      const aide = await seConnecter(banc, '77 400 00 30');
+      expect(((await sync(aide, 0, [], patron.organisationId)).json() as ReponseSync).moi.role).toBe('lecteur');
+      await inviter(patron, { telephone: '77 400 00 30', role: 'soigneur', zones: ['bat-a'] });
+      const moi = ((await sync(aide, 0, [], patron.organisationId)).json() as ReponseSync).moi;
+      expect(moi).toMatchObject({ role: 'soigneur', zones: ['bat-a'] });
+      expect(moi.droits).toContain('saisie.ponte');
+      expect((await get('/v1/moi', aide)).json().organisations[0].droits).toContain('saisie.ponte');
+    });
+
+    it('ne laisse pas modifier le propriétaire, et ignore les droits inconnus', async () => {
+      const patron = await seConnecter(banc, '77 400 00 31');
+      expect((await inviter(patron, { telephone: '77 400 00 31', role: 'lecteur' })).statusCode).toBe(400);
+      await inviter(patron, { telephone: '77 400 00 32', role: 'personnalise', droits: ['saisie.ponte', 'n.importe.quoi'] });
+      const liste = (await get(`/v1/organisations/${patron.organisationId}/membres`, patron)).json().membres;
+      expect(liste.find((m: { telephone: string }) => m.telephone === '+221774000032').droits).toEqual(['saisie.ponte']);
+    });
+
+    it('déconnecte les appareils d’une personne', async () => {
+      const patron = await seConnecter(banc, '77 400 00 33');
+      await inviter(patron, { telephone: '77 400 00 34', role: 'soigneur' });
+      const aide = await seConnecter(banc, '77 400 00 34');
+      expect((await get('/v1/moi', aide)).statusCode).toBe(200);
+      const r = await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent('+221774000034')}/deconnexion`, {}, patron);
+      expect(r.statusCode).toBe(200);
+      expect((await get('/v1/moi', aide)).statusCode).toBe(401);
+      expect((await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent('+221774000033')}/deconnexion`, {}, patron)).statusCode).toBe(400);
+    });
+  });
 });
 
 describe('configuration du serveur', () => {
@@ -316,4 +486,5 @@ describe('configuration du serveur', () => {
     expect(c.origines).toEqual(['https://a.sn', 'https://b.sn']);
     expect(lireConfig({ DATABASE_URL: 'x' }).origines).toBe(true);
   });
+
 });

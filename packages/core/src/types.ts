@@ -263,3 +263,13 @@ export interface DonneesElevage {
   quarantaines: Quarantaine[];
   notesQuarantaine: NoteQuarantaine[];
 }
+
+/** Informations de l'élevage imprimées sur les factures, reçus et récapitulatifs ; partagées entre tous les appareils (une seule fiche, `id: 'elevage'`). */
+export interface ProfilElevage extends Enregistrement {
+  nom?: string;
+  adresse?: string;
+  telephone?: string;
+  ninea?: string;
+  /** Logo en image (data:image/…;base64,…), réduit pour rester léger. */
+  logo?: string;
+}

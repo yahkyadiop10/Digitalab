@@ -72,6 +72,8 @@ export interface OperationFinanciere extends Enregistrement {
   employeId?: string;
   periode?: string;
   nature?: NatureSalaire;
+  /** `a_valider` : saisi par quelqu'un qui n'a pas le droit de valider ; rien ne compte tant qu'un responsable ne l'a pas validé. Absent = validé. */
+  statut?: 'a_valider' | 'validee';
 }
 
 /** Un règlement (acompte, solde…). Une opération peut en avoir plusieurs ; ils ne se modifient pas, on les annule. */
@@ -80,6 +82,7 @@ export interface Paiement extends Enregistrement {
   date: Jour;
   montant: number;
   mode: ModePaiement;
+  statut?: 'a_valider' | 'validee';
 }
 
 /** Carnet des clients et fournisseurs. */
@@ -125,6 +128,19 @@ export interface LigneFinance {
 
 const vivants = <T extends { supprimeLe?: number | null }>(xs: T[]) => xs.filter((x) => !x.supprimeLe);
 
+/** Les opérations et règlements « à valider » ne comptent dans aucun chiffre tant qu'ils ne sont pas validés. */
+const comptes = <T extends { supprimeLe?: number | null; statut?: string }>(xs: T[]) => xs.filter((x) => !x.supprimeLe && x.statut !== 'a_valider');
+
+/** Ce qui attend la validation d'un responsable. */
+export function enAttenteDeValidation(operations: OperationFinanciere[], paiements: Paiement[]): { operations: OperationFinanciere[]; paiements: Paiement[] } {
+  const ops = vivants(operations);
+  const vivantes = new Set(ops.map((o) => o.id));
+  return {
+    operations: ops.filter((o) => o.statut === 'a_valider').sort((a, b) => a.date.localeCompare(b.date)),
+    paiements: vivants(paiements).filter((p) => p.statut === 'a_valider' && vivantes.has(p.operationId)).sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 /** Total d'une facture : somme des lignes moins la remise (jamais négatif). */
 export function totalLignes(lignes: LigneDocument[], remise = 0): number {
   const somme = lignes.reduce((a, l) => a + Math.round(l.quantite * l.prixUnitaire), 0);
@@ -141,7 +157,7 @@ export interface Reglement {
  * sinon on retombe sur l'ancien indicateur « payé » (données saisies avant les règlements détaillés).
  */
 export function reglement(op: OperationFinanciere, paiements: Paiement[]): Reglement {
-  const siens = vivants(paiements).filter((p) => p.operationId === op.id);
+  const siens = comptes(paiements).filter((p) => p.operationId === op.id);
   const regle = siens.length > 0 ? siens.reduce((a, p) => a + p.montant, 0) : op.paye ? op.montant : 0;
   return { regle, reste: Math.max(0, op.montant - regle) };
 }
@@ -149,8 +165,8 @@ export function reglement(op: OperationFinanciere, paiements: Paiement[]): Regle
 /** Réunit les opérations saisies et les achats d'aliment avec un prix (dépense « aliment » déjà payée). */
 export function lignesFinance(operations: OperationFinanciere[], entreesStock: EntreeStock[], paiements: Paiement[] = []): LigneFinance[] {
   const parOperation = new Map<string, Paiement[]>();
-  for (const p of vivants(paiements)) parOperation.set(p.operationId, [...(parOperation.get(p.operationId) ?? []), p]);
-  const saisies = vivants(operations).map((o): LigneFinance => {
+  for (const p of comptes(paiements)) parOperation.set(p.operationId, [...(parOperation.get(p.operationId) ?? []), p]);
+  const saisies = comptes(operations).map((o): LigneFinance => {
     const { reste } = reglement(o, parOperation.get(o.id) ?? []);
     return {
       cle: o.id, date: o.date, sens: o.sens, categorie: o.categorie, montant: o.montant, lotId: o.lotId ?? null, paye: reste === 0, reste, automatique: false,
@@ -253,9 +269,9 @@ export function soldesParTiers(lignes: LigneFinance[]): Map<string, { aEncaisser
 
 /** Argent réellement encaissé ou payé sur la période, par moyen de paiement (d'après les règlements enregistrés). */
 export function fluxParMode(operations: OperationFinanciere[], paiements: Paiement[], periode = ''): { mode: ModePaiement; encaisse: number; paye: number }[] {
-  const sens = new Map(vivants(operations).map((o) => [o.id, o.sens]));
+  const sens = new Map(comptes(operations).map((o) => [o.id, o.sens]));
   const par = new Map<ModePaiement, { encaisse: number; paye: number }>();
-  for (const p of vivants(paiements)) {
+  for (const p of comptes(paiements)) {
     const s = sens.get(p.operationId);
     if (!s || (periode && !p.date.startsWith(periode))) continue;
     const c = par.get(p.mode) ?? { encaisse: 0, paye: 0 };
@@ -298,7 +314,7 @@ export const employesDuMois = (employes: Employe[], periode: string): Employe[] 
 
 /** Pour chaque employé du mois : ce qui est dû, ce qui est versé (salaire + avances), ce qui reste. */
 export function suiviSalaires(employes: Employe[], operations: OperationFinanciere[], periode: string): SuiviSalaire[] {
-  const paie = vivants(operations).filter((o) => o.sens === 'depense' && o.employeId && o.periode === periode);
+  const paie = comptes(operations).filter((o) => o.sens === 'depense' && o.employeId && o.periode === periode);
   return employesDuMois(employes, periode).map((employe) => {
     const siennes = paie.filter((o) => o.employeId === employe.id);
     const verse = siennes.filter((o) => o.nature !== 'prime').reduce((a, o) => a + o.montant, 0);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  coutAlimentParOeuf, employesDuMois, enAttente, enRetard, exporterCsv, fluxParMode, lignesFinance, moisDecale, parCategorie, parLot, prochainNumeroFacture,
+  coutAlimentParOeuf, employesDuMois, enAttenteDeValidation, enAttente, enRetard, exporterCsv, fluxParMode, lignesFinance, moisDecale, parCategorie, parLot, prochainNumeroFacture,
   reglement, resume, soldesParTiers, suiviSalaires, totalLignes, type Employe, type OperationFinanciere, type Paiement,
 } from './finances';
 import type { EntreeStock, Ponte } from './types';
@@ -155,5 +155,36 @@ describe('salaires', () => {
   it('ne tient pas compte des salaires annulés', () => {
     const annule = { ...paie('awa', 60000, 'salaire'), supprimeLe: 3 };
     expect(suiviSalaires(employes, [annule], '2026-10')[0]!.statut).toBe('a_payer');
+  });
+});
+
+describe('validation des dépenses et des paiements', () => {
+  const depense = op('depense', 'materiel', 30000, '2026-10-01', { paye: false, statut: 'a_valider' });
+  const validee = op('depense', 'soins', 8000, '2026-10-02', { statut: 'validee' });
+
+  it('une dépense à valider ne compte dans aucun chiffre ni dans les sommes dues', () => {
+    const l = lignesFinance([depense, validee], []);
+    expect(l).toHaveLength(1);
+    expect(resume(l, '2026-10').depenses).toBe(8000);
+    expect(enAttente(l).totalAPayer).toBe(0);
+  });
+  it('un paiement à valider ne réduit pas le reste à payer', () => {
+    const facture = op('depense', 'materiel', 10000, '2026-10-01', { paye: false });
+    const attente = { ...paiement(facture.id, 10000), statut: 'a_valider' as const };
+    expect(reglement(facture, [attente]).reste).toBe(10000);
+    expect(reglement(facture, [{ ...attente, statut: 'validee' }]).reste).toBe(0);
+  });
+  it('liste ce qui attend une validation, sans les éléments annulés', () => {
+    const facture = op('depense', 'materiel', 10000, '2026-10-01', { paye: false });
+    const p = { ...paiement(facture.id, 4000), statut: 'a_valider' as const };
+    const annulee = { ...op('depense', 'autre', 5, '2026-10-01', { statut: 'a_valider' }), supprimeLe: 9 };
+    const r = enAttenteDeValidation([depense, validee, facture, annulee], [p, { ...paiement(facture.id, 1), statut: 'a_valider' as const, supprimeLe: 1 }]);
+    expect(r.operations.map((o) => o.id)).toEqual([depense.id]);
+    expect(r.paiements).toHaveLength(1);
+  });
+  it('un salaire à valider ne compte pas comme versé', () => {
+    const emp: Employe = { id: 'e', ...base, nom: 'E', salaire: 1000 };
+    const s = op('depense', 'main_oeuvre', 1000, '2026-10-28', { employeId: 'e', periode: '2026-10', nature: 'salaire', statut: 'a_valider' });
+    expect(suiviSalaires([emp], [s], '2026-10')[0]!.statut).toBe('a_payer');
   });
 });

@@ -4,8 +4,11 @@ import {
   CATEGORIES_RECETTE,
   LIBELLES_CATEGORIES,
   coutAlimentParOeuf,
+  aDroit,
   enAttente,
+  enAttenteDeValidation,
   enRetard,
+  peutValiderDepense,
   exporterCsv,
   fluxParMode,
   LIBELLES_MODES,
@@ -22,6 +25,7 @@ import {
   type ModePaiement,
   type SensOperation,
 } from '@digitalab/core';
+import { Si } from '../components/Si';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { dateCourte, formatMontant, signe } from '../format';
@@ -36,8 +40,17 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
   const auj = jourLocal(maintenant);
   const moisCourant = auj.slice(0, 7);
   const [mois, setMois] = useState(moisCourant);
-  const lignes = lignesFinance(operations, donnees.entreesStock, paiements);
-  const flux = fluxParMode(operations, paiements, mois);
+  const droits = elevage.moi.droits;
+  const voitDep = aDroit(droits, 'finances.voir_depenses');
+  const voitRec = aDroit(droits, 'finances.voir_recettes');
+  const lignes = lignesFinance(operations, donnees.entreesStock, paiements).filter((l) => (l.sens === 'depense' ? voitDep : voitRec));
+  const flux = fluxParMode(operations, paiements, mois).filter((x) => (x.encaisse > 0 && voitRec) || (x.paye > 0 && voitDep)).map((x) => ({ ...x, encaisse: voitRec ? x.encaisse : 0, paye: voitDep ? x.paye : 0 }));
+  const validation = enAttenteDeValidation(operations, paiements);
+  const aValiderOps = validation.operations.filter((o) => (o.employeId ? aDroit(droits, 'salaires.payer') : peutValiderDepense(droits, o.categorie)));
+  const aValiderPaiements = validation.paiements.filter((p) => {
+    const o = operations.find((x) => x.id === p.operationId);
+    return o?.sens === 'depense' && (aDroit(droits, 'finances.valider_paiement') || aDroit(droits, 'salaires.payer'));
+  });
   const r = resume(lignes, mois);
   const attente = enAttente(lignes);
   const delMois = lignes.filter((l) => l.date.startsWith(mois));
@@ -61,13 +74,44 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
   return (
     <>
       <div className="rangee">
-        <a className="bouton court" href="#/finances/depense">− Dépense</a>
-        <a className="bouton court" href="#/finances/recette">+ Recette</a>
+        <Si elevage={elevage} droit="finances.saisir_depense"><a className="bouton court" href="#/finances/depense">− Dépense</a></Si>
+        <Si elevage={elevage} droit="finances.saisir_facture"><a className="bouton court" href="#/finances/recette">+ Recette</a></Si>
       </div>
       <div className="rangee">
-        <a className="bouton alt court" href="#/finances/salaires">👷 Salaires</a>
-        <a className="bouton alt court" href="#/finances/carnet">📒 Clients et fournisseurs</a>
+        <Si elevage={elevage} droit="salaires.voir"><a className="bouton alt court" href="#/finances/salaires">👷 Salaires</a></Si>
+        <Si elevage={elevage} un={['finances.carnet', 'finances.saisir_facture', 'finances.encaisser']}><a className="bouton alt court" href="#/finances/carnet">📒 Clients et fournisseurs</a></Si>
       </div>
+
+      {(aValiderOps.length > 0 || aValiderPaiements.length > 0) && (
+        <>
+          <h2>À valider</h2>
+          {aValiderOps.map((o) => (
+            <div key={o.id} className="carte">
+              <h3>Dépense à valider : {formatMontant(o.montant)}</h3>
+              <p className="muet">{LIBELLES_CATEGORIES[o.categorie] ?? o.categorie}{o.tiers ? ` · ${o.tiers}` : ''} · du {dateCourte(o.date)}</p>
+              <div className="rangee">
+                <button className="bouton court" onClick={async () => { await repo.valider({ table: 'operations', id: o.id }); notifier('Dépense validée ✓'); }}>Valider</button>
+                <a className="bouton alt court" href={`#/finances/op/${o.id}`}>Voir</a>
+              </div>
+            </div>
+          ))}
+          {aValiderPaiements.map((p) => {
+            const o = operations.find((x) => x.id === p.operationId)!;
+            return (
+              <div key={p.id} className="carte">
+                <h3>Paiement à valider : {formatMontant(p.montant)}</h3>
+                <p className="muet">{LIBELLES_CATEGORIES[o.categorie] ?? o.categorie}{o.tiers ? ` · ${o.tiers}` : ''} · {LIBELLES_MODES[p.mode]} · {dateCourte(p.date)}</p>
+                <div className="rangee">
+                  <button className="bouton court" onClick={async () => { await repo.valider({ table: 'paiements', id: p.id }); notifier('Paiement validé ✓'); }}>Valider</button>
+                  <a className="bouton alt court" href={`#/finances/op/${o.id}`}>Voir</a>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {!voitDep && !voitRec && <div className="carte muet">Vous pouvez saisir, mais votre profil ne permet pas de consulter les chiffres.</div>}
 
       <div className="mois" role="group" aria-label="Choix du mois">
         <button className="lien" onClick={() => setMois(moisDecale(mois, -1))} aria-label="Mois précédent">←</button>
@@ -75,14 +119,18 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
         <button className="lien" onClick={() => setMois(moisDecale(mois, 1))} disabled={mois >= moisCourant} aria-label="Mois suivant">→</button>
       </div>
 
-      <div className="tuiles">
-        <div className="tuile"><b className="montant">{formatMontant(r.recettes)}</b><span>recettes</span></div>
-        <div className="tuile"><b className="montant">{formatMontant(r.depenses)}</b><span>dépenses</span></div>
-      </div>
-      <div className={`bandeau n-${r.resultat < 0 ? 'orange' : 'vert'}`}>
-        <strong>Résultat du mois : {signe(r.resultat)} {formatMontant(r.resultat)}</strong>
-      </div>
-      {coutOeuf !== null && <p className="muet">Aliment acheté ce mois-ci : environ {coutOeuf} FCFA par œuf produit (estimation).</p>}
+      {(voitDep || voitRec) && (
+        <div className="tuiles">
+          {voitRec && <div className="tuile"><b className="montant">{formatMontant(r.recettes)}</b><span>recettes</span></div>}
+          {voitDep && <div className="tuile"><b className="montant">{formatMontant(r.depenses)}</b><span>dépenses</span></div>}
+        </div>
+      )}
+      {voitDep && voitRec && (
+        <div className={`bandeau n-${r.resultat < 0 ? 'orange' : 'vert'}`}>
+          <strong>Résultat du mois : {signe(r.resultat)} {formatMontant(r.resultat)}</strong>
+        </div>
+      )}
+      {voitDep && voitRec && coutOeuf !== null && <p className="muet">Aliment acheté ce mois-ci : environ {coutOeuf} FCFA par œuf produit (estimation).</p>}
 
       {(attente.aEncaisser.length > 0 || attente.aPayer.length > 0) && (
         <>
@@ -120,13 +168,13 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
                 {l.reste > 0 && <><br /><small className="muet">reste {formatMontant(l.reste)} à {l.sens === 'recette' ? 'encaisser' : 'payer'}</small></>}
               </span>
               <b className={l.sens === 'recette' ? 'montant gain' : 'montant'}>{l.sens === 'recette' ? '+' : '−'} {formatMontant(l.montant)}</b>
-              {!l.automatique && <button className="lien" onClick={() => { if (window.confirm('Annuler cette ligne ?')) void repo.annuler({ table: 'operations', id: l.cle }); }}>Annuler</button>}
+              {!l.automatique && aDroit(droits, l.sens === 'recette' ? 'finances.annuler_vente' : 'finances.annuler_depense') && <button className="lien" onClick={() => { if (window.confirm('Annuler cette ligne ?')) void repo.annuler({ table: 'operations', id: l.cle }); }}>Annuler</button>}
             </div>
           ))}
         </div>
       )}
 
-      {lots.length > 0 && (
+      {voitDep && voitRec && lots.length > 0 && (
         <>
           <h2>Par lot</h2>
           <div className="carte">
@@ -137,11 +185,13 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
         </>
       )}
 
+      <Si elevage={elevage} droit="finances.exporter">
       <h2>Pour votre comptable</h2>
       <div className="carte">
         <p className="muet">Un fichier avec toutes vos dépenses et recettes, lisible dans Excel. Il n’ouvre aucun compte et n’est pas un document comptable officiel.</p>
         <button className="bouton alt" onClick={exporter}>Télécharger le fichier (CSV)</button>
       </div>
+      </Si>
     </>
   );
 }
@@ -222,12 +272,14 @@ export function FormOperation({ elevage, sens, lotInitial }: { elevage: Elevage;
       const a: Annulation = await repo.ajouterOperation({
         sens, categorie, date, lotId: lotId || null, tiers, telephoneTiers: telephone, note,
         paye: reglage === 'tout', mode,
+        aValider: sens === 'depense' && !peutValiderDepense(elevage.moi.droits, categorie),
+        paiementAValider: sens === 'depense' && !aDroit(elevage.moi.droits, 'finances.valider_paiement'),
         ...(reglage === 'acompte' ? { acompte: versNombre(acompte) } : {}),
         ...(reglage !== 'tout' && echeance ? { echeance } : {}),
         ...(numero.trim() ? { numero } : {}),
         ...(detaille ? { lignes: utiles.map((l) => ({ ...l, quantite: l.quantite, prixUnitaire: l.prixUnitaire })), remise: versNombre(remise) || 0 } : { montant: versNombre(montant) }),
       });
-      notifier(sens === 'depense' ? 'Dépense notée ✓' : detaille ? 'Facture enregistrée ✓' : 'Recette notée ✓', { annuler: () => repo.annuler(a) });
+      notifier(sens === 'depense' ? (peutValiderDepense(elevage.moi.droits, categorie) ? 'Dépense notée ✓' : 'Dépense notée ✓ : elle attend la validation d’un responsable') : detaille ? 'Facture enregistrée ✓' : 'Recette notée ✓', { annuler: () => repo.annuler(a) });
       aller(detaille && sens === 'recette' ? `finances/op/${a.id}` : 'finances');
     } catch (err) {
       setErreur(err instanceof ErreurSaisie ? err.message : 'Enregistrement impossible.');

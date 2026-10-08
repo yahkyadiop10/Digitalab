@@ -1,8 +1,9 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { stockAlimentKg } from '@digitalab/core';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { CAUSES_DECES } from '../i18n/fr';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
+import { peut, TUILES_SAISIE } from '../droits';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
 
@@ -22,21 +23,28 @@ export function Saisie({ elevage, type, lotInitial }: { elevage: Elevage; type?:
       <>
         <h2>Que voulez-vous noter ?</h2>
         {MENU.map((m) => (
-          <a key={m.type} className="gros" href={`#/saisie/${m.type}`}>{m.icone} {m.titre}<span>{m.aide}</span></a>
+          <Tuile key={m.type} elevage={elevage} href={`saisie/${m.type}`}>{m.icone} {m.titre}<span>{m.aide}</span></Tuile>
         ))}
-        <a className="gros" href="#/finances/depense">💸 Dépense<span>Aliment, soins, matériel…</span></a>
-        <a className="gros" href="#/finances/recette">💰 Recette<span>Vente d’œufs, de poussins, d’animaux</span></a>
-        <a className="gros" href="#/sante/probleme">🩺 Problème de santé<span>Symptômes, pistes à vérifier</span></a>
-        <a className="gros" href="#/sante/vaccin">💉 Vaccin fait<span>Date, vaccin, numéro de flacon</span></a>
-        <a className="gros" href="#/couveuse/nouvelle">🥚 Mise en incubation<span>Mettre des œufs dans la couveuse</span></a>
-        <a className="gros" href="#/quarantaine/arrivee">🚧 Nouvelle arrivée<span>Animaux achetés, mis en quarantaine</span></a>
-        <a className="gros" href="#/cheptel/nouveau">🐔 Nouveau lot<span>Arrivée ou création d’un groupe d’animaux</span></a>
+        <Tuile elevage={elevage} href="finances/depense">💸 Dépense<span>Aliment, soins, matériel…</span></Tuile>
+        <Tuile elevage={elevage} href="finances/recette">💰 Recette<span>Vente d’œufs, de poussins, d’animaux</span></Tuile>
+        <Tuile elevage={elevage} href="sante/probleme">🩺 Problème de santé<span>Symptômes, pistes à vérifier</span></Tuile>
+        <Tuile elevage={elevage} href="sante/vaccin">💉 Vaccin fait<span>Date, vaccin, numéro de flacon</span></Tuile>
+        <Tuile elevage={elevage} href="couveuse/nouvelle">🥚 Mise en incubation<span>Mettre des œufs dans la couveuse</span></Tuile>
+        <Tuile elevage={elevage} href="quarantaine/arrivee">🚧 Nouvelle arrivée<span>Animaux achetés, mis en quarantaine</span></Tuile>
+        <Tuile elevage={elevage} href="cheptel/nouveau">🐔 Nouveau lot<span>Arrivée ou création d’un groupe d’animaux</span></Tuile>
       </>
     );
   }
   if (type === 'stock') return <FormStock elevage={elevage} />;
   if (type === 'ponte' || type === 'aliment' || type === 'deces' || type === 'sortie') return <FormLot elevage={elevage} type={type} lotInitial={lotInitial ?? null} />;
   return <Retour vers="saisie" />;
+}
+
+/** Entrée du menu de saisie, montrée seulement si la personne a le droit correspondant. */
+function Tuile({ elevage, href, children }: { elevage: Elevage; href: string; children: ReactNode }) {
+  const droit = TUILES_SAISIE.find((t) => t.href === href)?.droit;
+  if (droit && !peut(elevage, droit)) return null;
+  return <a className="gros" href={`#/${href}`}>{children}</a>;
 }
 
 function useEnvoi() {

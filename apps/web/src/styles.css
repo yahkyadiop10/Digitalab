@@ -188,3 +188,17 @@ fieldset.carte legend { font-weight: 700; padding: 0 6px; }
 .ligne b.montant { white-space: nowrap; overflow-wrap: normal; }
 .document th, .document td:not(:first-child) { white-space: nowrap; overflow-wrap: normal; }
 .document tfoot td[colspan] { white-space: normal; }
+
+/* ---------- Gestion des utilisateurs ---------- */
+.module-droits summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; list-style: none; gap: 10px; }
+.module-droits summary::-webkit-details-marker { display: none; }
+.module-droits summary .case { margin: 0; font-size: 18px; }
+.module-droits > .case { font-weight: 500; }
+.gros-code { font-size: 40px; font-weight: 800; letter-spacing: .25em; text-align: center; margin: 12px 0; font-variant-numeric: tabular-nums; }
+.logo-elevage { max-height: 56px; max-width: 160px; object-fit: contain; display: block; }
+
+header .logo-entete { height: 30px; width: auto; max-width: 70px; object-fit: contain; background: #fff; border-radius: 6px; padding: 2px; align-self: center; }
+.logo-bloc { margin-bottom: 8px; }
+.module-droits summary::after { content: '▾'; color: var(--muet); font-size: 18px; margin-left: 4px; }
+.module-droits[open] summary::after { content: '▴'; }
+.module-droits summary small { margin-left: auto; }

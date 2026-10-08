@@ -10,6 +10,9 @@ import {
   type Employe,
   type OperationFinanciere,
   type Paiement,
+  type ProfilElevage,
+  filtrerParZones,
+  TOUTES_LES_FONCTIONS,
   type Tiers,
 } from '@digitalab/core';
 import { db, type EtatAlerte } from './db';
@@ -32,6 +35,10 @@ export interface Elevage {
   paiements: Paiement[];
   tiers: Tiers[];
   employes: Employe[];
+  /** Nom, coordonnées et logo de l'élevage (imprimés sur les documents). */
+  profil: ProfilElevage | undefined;
+  /** Fonction, droits et bâtiments réservés de la personne connectée ; sans compte relié, tous les droits. */
+  moi: { fonction?: string; droits: string[]; zones: string[]; role: string; relie: boolean };
   reglages: Reglages;
   effectifParLot: Map<string, number>;
   alertes: AlerteEtat[];
@@ -84,14 +91,17 @@ export function useElevage(): Elevage | null {
   const paiements = useLiveQuery(() => db.paiements.toArray(), []);
   const tiers = useLiveQuery(() => db.tiers.toArray(), []);
   const employes = useLiveQuery(() => db.employes.toArray(), []);
+  const profils = useLiveQuery(() => db.profil.toArray(), []);
+  const connexion = useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
   const quarantaines = useLiveQuery(() => db.quarantaines.toArray(), []);
   const notesQuarantaine = useLiveQuery(() => db.notesQuarantaine.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !operations || !paiements || !tiers || !employes || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
-    const donnees: DonneesElevage = {
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !profils || connexion === undefined || !operations || !paiements || !tiers || !employes || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
+    const zones = connexion?.zones ?? [];
+    const completes: DonneesElevage = {
       lots: vivants(lots),
       logements: vivants(logements),
       mouvements: vivants(mouvements),
@@ -105,6 +115,8 @@ export function useElevage(): Elevage | null {
       quarantaines: vivants(quarantaines),
       notesQuarantaine: vivants(notesQuarantaine),
     };
+    // Une personne chargée d'un bâtiment ne voit que celui-ci : tous les écrans et tous les calculs s'en trouvent restreints d'un coup.
+    const donnees = filtrerParZones(completes, zones);
     const reglages = fusionnerReglages(Object.fromEntries(reglagesBruts.map((r) => [r.cle, r.valeur])));
     const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils, protocoles: reglages.protocoles }), etats, maintenant.getTime());
     const noms: Noms = {
@@ -113,6 +125,7 @@ export function useElevage(): Elevage | null {
       incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
       quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
     };
-    return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
+    return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), profil: vivants(profils).find((p) => p.id === 'elevage'),
+      moi: connexion ? { droits: connexion.droits, zones: connexion.zones, role: connexion.role, relie: true, ...(connexion.fonction ? { fonction: connexion.fonction } : {}) } : { droits: TOUTES_LES_FONCTIONS, zones: [], role: 'proprietaire', relie: false }, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, profils, connexion, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
 }

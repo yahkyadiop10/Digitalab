@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Si } from '../components/Si';
 import {
   ajouterJours,
   ecartJours,
@@ -75,8 +76,8 @@ export function PageCouveuse({ elevage }: { elevage: Elevage }) {
           </article>
         );
       })}
-      <a className="bouton" href="#/couveuse/nouvelle">+ Mettre des œufs en incubation</a>
-      <a className="bouton alt" href="#/couveuse/appareil">+ Ajouter une couveuse</a>
+      <Si elevage={elevage} droit="couveuse.mise"><a className="bouton" href="#/couveuse/nouvelle">+ Mettre des œufs en incubation</a></Si>
+      <Si elevage={elevage} droit="couveuse.appareils"><a className="bouton alt" href="#/couveuse/appareil">+ Ajouter une couveuse</a></Si>
 
       <h2>En cours</h2>
       {enCours.length === 0 && <div className="carte muet">Aucun œuf en incubation.</div>}

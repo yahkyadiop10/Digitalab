@@ -16,6 +16,7 @@ export const TABLES_SYNCHRONISEES = [
   'paiements',
   'tiers',
   'employes',
+  'profil',
 ] as const;
 
 export type TableSynchronisee = (typeof TABLES_SYNCHRONISEES)[number];
@@ -49,16 +50,22 @@ export interface ReponseSync {
   reste: boolean;
   /** Nombre de vos modifications écartées car une version plus récente existait déjà sur le serveur. */
   ecartes: number;
+  /** Nombre de vos modifications refusées faute d'autorisation. */
+  refuses: number;
+  /** Vos droits actuels, pour que l'appareil s'adapte quand l'administrateur les change. */
+  moi: DroitsMembre;
 }
 
-export type RoleMembre = 'proprietaire' | 'soigneur' | 'veterinaire' | 'lecteur';
+export type { RoleMembre } from './permissions';
 
-export const ROLES: Record<RoleMembre, { libelle: string; ecriture: boolean }> = {
-  proprietaire: { libelle: 'Propriétaire', ecriture: true },
-  soigneur: { libelle: 'Soigneur', ecriture: true },
-  veterinaire: { libelle: 'Vétérinaire (lecture)', ecriture: false },
-  lecteur: { libelle: 'Lecteur', ecriture: false },
-};
+/** Ce que le serveur dit de la personne connectée : son profil, ses droits et ses zones. */
+export interface DroitsMembre {
+  role: import('./permissions').RoleMembre;
+  fonction?: string;
+  droits: string[];
+  /** Bâtiments et cages réservés à cette personne ; vide = toute la ferme. */
+  zones: string[];
+}
 
 /** Garde un numéro de téléphone sous forme internationale (+221…), ou `null` s'il est invalide. */
 export function normaliserTelephone(brut: string): string | null {

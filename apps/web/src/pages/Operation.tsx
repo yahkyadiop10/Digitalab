@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { LIBELLES_CATEGORIES, LIBELLES_MODES, MODES_PAIEMENT, jourLocal, normaliserTelephone, reglement, totalLignes, type ModePaiement, type OperationFinanciere, type Paiement } from '@digitalab/core';
+import { LIBELLES_CATEGORIES, LIBELLES_MODES, MODES_PAIEMENT, aDroit, jourLocal, normaliserTelephone, peutValiderDepense, reglement, totalLignes, type ModePaiement, type OperationFinanciere, type Paiement } from '@digitalab/core';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
+import { profilDe } from '../droits';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -20,6 +21,19 @@ function trouver(elevage: Elevage, id: string): { op: OperationFinanciere; paiem
   const paiements = elevage.paiements.filter((p) => p.operationId === id).sort((a, b) => a.date.localeCompare(b.date));
   const telephone = elevage.tiers.find((t) => t.id === op.tiersId)?.telephone;
   return { op, paiements, ...(telephone ? { telephone } : {}) };
+}
+
+/** En-tête des documents imprimés : logo, nom et coordonnées de l'élevage. */
+export function EnteteElevage({ profil }: { profil: ReturnType<typeof profilDe> }) {
+  return (
+    <div>
+      {profil.logo && <img className="logo-elevage" src={profil.logo} alt="" />}
+      <h1>{profil.nom}</h1>
+      {profil.adresse && <p>{profil.adresse}</p>}
+      {profil.telephone && <p>Tél. {profil.telephone}</p>}
+      {profil.ninea && <p>NINEA / RC : {profil.ninea}</p>}
+    </div>
+  );
 }
 
 function Introuvable({ vers }: { vers: string }) {
@@ -43,11 +57,16 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
   const { regle, reste } = reglement(op, paiements);
   const recette = op.sens === 'recette';
   const ancienReglement = paiements.length === 0 && op.paye;
+  const droits = elevage.moi.droits;
+  const peutAnnulerOp = recette ? aDroit(droits, 'finances.annuler_vente') : aDroit(droits, 'finances.annuler_depense');
+  const peutValiderOp = !recette && (op.employeId ? aDroit(droits, 'salaires.payer') : peutValiderDepense(droits, op.categorie));
+  const peutValiderPaiement = !recette && (aDroit(droits, 'finances.valider_paiement') || aDroit(droits, 'salaires.payer'));
+  const peutRegler = recette ? aDroit(droits, 'finances.encaisser') : aDroit(droits, 'finances.payer') || aDroit(droits, 'salaires.payer');
 
   const enregistrer = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const a = await repo.ajouterPaiement(op.id, versNombre(montant || String(reste)), mode, date);
+      const a = await repo.ajouterPaiement(op.id, versNombre(montant || String(reste)), mode, date, !recette && !peutValiderPaiement);
       notifier(recette ? 'Encaissement noté ✓' : 'Paiement noté ✓', { annuler: () => repo.annuler(a) });
       setMontant('');
       setErreur(null);
@@ -63,6 +82,18 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
       <Retour vers="finances" />
       <h2>{recette ? (op.numero ? `Facture ${op.numero}` : 'Recette') : op.numero ? `Dépense · réf. ${op.numero}` : 'Dépense'}</h2>
 
+      {op.statut === 'a_valider' && (
+        <div className="bandeau n-jaune" role="status">
+          <strong>À valider</strong>
+          <span>Cette dépense ne compte pas encore dans vos chiffres.</span>
+          {peutValiderOp && (
+            <span className="rangee">
+              <button className="bouton court" onClick={async () => { await repo.valider({ table: 'operations', id: op.id }); notifier('Dépense validée ✓'); }}>Valider</button>
+              <button className="bouton alt court" onClick={async () => { if (window.confirm('Refuser cette dépense ? Elle sera annulée.')) { await repo.annuler({ table: 'operations', id: op.id }); aller('finances'); } }}>Refuser</button>
+            </span>
+          )}
+        </div>
+      )}
       <div className="carte">
         <div className="ligne"><span>Date</span><b>{dateLongue(op.date)}</b></div>
         <div className="ligne"><span>Catégorie</span><b>{LIBELLES_CATEGORIES[op.categorie] ?? op.categorie}</b></div>
@@ -87,9 +118,14 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
         <div className="ligne"><span>Total</span><b className="montant">{formatMontant(op.montant)}</b></div>
         {paiements.map((p) => (
           <div key={p.id} className="ligne">
-            <span>{dateCourte(p.date)} · {LIBELLES_MODES[p.mode]}</span>
+            <span>
+              {dateCourte(p.date)} · {LIBELLES_MODES[p.mode]}
+              {p.statut === 'a_valider' && <><br /><small className="erreur">à valider, ne compte pas encore</small></>}
+              <br /><a className="lien" href={`#/finances/recu/${p.id}`}>Reçu</a>
+              {p.statut === 'a_valider' && peutValiderPaiement && <> · <button className="lien" onClick={async () => { await repo.valider({ table: 'paiements', id: p.id }); notifier('Paiement validé ✓'); }}>Valider</button></>}
+            </span>
             <b className="montant">{formatMontant(p.montant)}</b>
-            <button className="lien" onClick={() => { if (window.confirm('Annuler ce règlement ?')) void repo.annuler({ table: 'paiements', id: p.id }); }}>Annuler</button>
+            {peutAnnulerOp && <button className="lien" onClick={() => { if (window.confirm('Annuler ce règlement ?')) void repo.annuler({ table: 'paiements', id: p.id }); }}>Annuler</button>}
           </div>
         ))}
         {ancienReglement && <p className="muet">Réglé en totalité (saisie sans détail du moyen de paiement).</p>}
@@ -97,7 +133,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
         <div className="ligne"><span><b>Reste</b></span><b className={reste > 0 ? 'montant' : 'montant gain'}>{reste > 0 ? formatMontant(reste) : 'Soldé ✓'}</b></div>
       </div>
 
-      {reste > 0 && (
+      {reste > 0 && peutRegler && op.statut !== 'a_valider' && (
         <form className="carte" onSubmit={enregistrer}>
           <p><b>{recette ? 'Noter un encaissement' : 'Noter un paiement'}</b></p>
           <Champ libelle="Montant (FCFA)" aide={`Laissez vide pour le solde : ${formatMontant(reste)}.`}><Nombre valeur={montant} onChange={setMontant} min={0} pas={500} unite="FCFA" /></Champ>
@@ -113,7 +149,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
       <div className="carte">
         {(recette || (op.lignes && op.lignes.length > 0)) && <a className="bouton alt" href={`#/finances/op/${op.id}/facture`}>{recette ? 'Voir et imprimer la facture' : 'Voir le récapitulatif'}</a>}
         {recette && reste > 0 && <a className="bouton alt" href={lienWhatsApp(telephone, relance)} target="_blank" rel="noopener noreferrer">Relancer par WhatsApp</a>}
-        <button
+        {peutAnnulerOp && <button
           className="lien danger"
           onClick={async () => {
             if (!window.confirm('Annuler cette opération et ses règlements ? Elle ne comptera plus dans vos chiffres.')) return;
@@ -123,7 +159,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
           }}
         >
           Annuler cette opération
-        </button>
+        </button>}
       </div>
     </>
   );
@@ -135,10 +171,10 @@ export function PageFacture({ elevage, id }: { elevage: Elevage; id: string }) {
   if (!trouve) return <Introuvable vers="finances" />;
   const { op, paiements, telephone } = trouve;
   const { regle, reste } = reglement(op, paiements);
-  const { nomElevage, identite } = elevage.reglages;
+  const profil = profilDe(elevage);
   const recette = op.sens === 'recette';
   const lignes = op.lignes && op.lignes.length > 0 ? op.lignes : [{ libelle: LIBELLES_CATEGORIES[op.categorie] ?? op.categorie, quantite: 1, prixUnitaire: op.montant }];
-  const resume = `${recette ? 'Facture' : 'Dépense'} ${op.numero ?? ''} – ${nomElevage || 'Mon élevage'} – total ${formatMontant(op.montant)}${reste > 0 ? `, reste ${formatMontant(reste)}` : ', soldée'}.`.replace('  ', ' ');
+  const resume = `${recette ? 'Facture' : 'Dépense'} ${op.numero ?? ''} – ${profil.nom} – total ${formatMontant(op.montant)}${reste > 0 ? `, reste ${formatMontant(reste)}` : ', soldée'}.`.replace('  ', ' ');
 
   return (
     <>
@@ -149,12 +185,7 @@ export function PageFacture({ elevage, id }: { elevage: Elevage; id: string }) {
       </div>
       <article className="document">
         <header className="doc-entete">
-          <div>
-            <h1>{nomElevage || 'Mon élevage'}</h1>
-            {identite.adresse && <p>{identite.adresse}</p>}
-            {identite.telephone && <p>Tél. {identite.telephone}</p>}
-            {identite.ninea && <p>NINEA / RC : {identite.ninea}</p>}
-          </div>
+          <EnteteElevage profil={profil} />
           <div className="doc-titre">
             <h2>{recette ? 'FACTURE' : 'DÉPENSE'}</h2>
             {op.numero && <p><b>N° {op.numero}</b></p>}
@@ -180,6 +211,50 @@ export function PageFacture({ elevage, id }: { elevage: Elevage; id: string }) {
         </table>
         {op.note && <p>{op.note}</p>}
         <p className="doc-pied">Document de gestion établi avec Digitalab. Il ne remplace pas une facture normalisée lorsque celle-ci est exigée.</p>
+      </article>
+    </>
+  );
+}
+
+/** Reçu d'un encaissement ou d'un paiement, à imprimer ou à enregistrer en PDF. */
+export function PageRecu({ elevage, id }: { elevage: Elevage; id: string }) {
+  const paiement = elevage.paiements.find((p) => p.id === id);
+  const op = paiement ? elevage.operations.find((o) => o.id === paiement.operationId) : undefined;
+  if (!paiement || !op) return <Introuvable vers="finances" />;
+  const profil = profilDe(elevage);
+  const recette = op.sens === 'recette';
+  const telephone = elevage.tiers.find((t) => t.id === op.tiersId)?.telephone;
+  const tous = elevage.paiements.filter((p) => p.operationId === op.id && p.statut !== 'a_valider').sort((a, b) => a.date.localeCompare(b.date));
+  const { reste } = reglement(op, elevage.paiements.filter((p) => p.operationId === op.id));
+  const resume = `Reçu de ${formatMontant(paiement.montant)} (${LIBELLES_MODES[paiement.mode]}) du ${dateLongue(paiement.date)} – ${profil.nom}${reste > 0 ? `. Reste ${formatMontant(reste)}.` : '. Soldé.'}`;
+  return (
+    <>
+      <div className="sans-impression">
+        <Retour vers={`finances/op/${op.id}`} />
+        <button className="bouton" onClick={() => window.print()}>Imprimer ou enregistrer en PDF</button>
+        {recette && <a className="bouton alt" href={lienWhatsApp(telephone, resume)} target="_blank" rel="noopener noreferrer">Envoyer par WhatsApp</a>}
+      </div>
+      <article className="document">
+        <header className="doc-entete">
+          <EnteteElevage profil={profil} />
+          <div className="doc-titre">
+            <h2>{recette ? 'REÇU' : 'REÇU DE PAIEMENT'}</h2>
+            <p>Date : {dateLongue(paiement.date)}</p>
+            {op.numero && <p>{recette ? 'Facture' : 'Réf.'} {op.numero}</p>}
+          </div>
+        </header>
+        {op.tiers && <p className="doc-client"><b>{recette ? 'Reçu de' : 'Payé à'} :</b> {op.tiers}</p>}
+        <table>
+          <tbody>
+            <tr><td>Montant {recette ? 'reçu' : 'payé'}</td><td><b>{formatMontant(paiement.montant)}</b></td></tr>
+            <tr><td>Moyen de paiement</td><td>{LIBELLES_MODES[paiement.mode]}</td></tr>
+            <tr><td>{LIBELLES_CATEGORIES[op.categorie] ?? op.categorie}</td><td>Total {formatMontant(op.montant)}</td></tr>
+            <tr><td>Déjà {recette ? 'encaissé' : 'payé'} (avec ce règlement)</td><td>{formatMontant(tous.filter((p) => p.date <= paiement.date).reduce((a, p) => a + p.montant, 0))}</td></tr>
+            <tr><td><b>{reste > 0 ? 'Reste à régler' : 'Solde'}</b></td><td><b>{reste > 0 ? formatMontant(reste) : 'Soldé ✓'}</b></td></tr>
+          </tbody>
+        </table>
+        <div className="signatures"><span>Signature de celui qui {recette ? 'reçoit' : 'paie'}</span><span>Signature de l’autre partie</span></div>
+        <p className="doc-pied">Reçu établi avec Digitalab.</p>
       </article>
     </>
   );

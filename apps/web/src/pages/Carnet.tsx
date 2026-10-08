@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { LIBELLES_CATEGORIES, lignesFinance, soldesParTiers } from '@digitalab/core';
+import { Si } from '../components/Si';
 import { Champ, Retour, useNotifier } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { ErreurSaisie, repo } from '../repo';
@@ -24,7 +25,7 @@ export function PageCarnet({ elevage }: { elevage: Elevage }) {
           </a>
         );
       })}
-      <a className="bouton alt" href="#/finances/carnet/nouveau">+ Ajouter</a>
+      <Si elevage={elevage} droit="finances.carnet"><a className="bouton alt" href="#/finances/carnet/nouveau">+ Ajouter</a></Si>
     </>
   );
 }

@@ -80,24 +80,44 @@ try {
   await connecter(a.page, '77 000 00 01');
   await a.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   await a.page.getByRole('banner').getByRole('link', { name: 'Compte et synchronisation' }).click();
-  await a.page.getByRole('heading', { name: 'Mon équipe' }).waitFor();
+  await a.page.getByRole('banner').getByRole('link', { name: 'Compte et synchronisation' }).click();
+  await a.page.getByRole('button', { name: 'Synchroniser maintenant' }).waitFor();
   assert.match(await a.texte(), /Élevage\s+Ferme sync/);
   await a.page.getByRole('button', { name: 'Synchroniser maintenant' }).click();
   await a.page.getByText(/Tout est à jour|Synchronisé ✓/).waitFor();
 
-  console.log('→ 2 propriétaire invite le vétérinaire');
-  await a.page.getByLabel('Son numéro de téléphone').fill('77 000 00 02');
-  await a.page.getByLabel('Son rôle').selectOption({ label: 'Vétérinaire (lecture)' });
-  await a.page.getByRole('button', { name: 'Ajouter' }).click();
-  await a.page.getByText('+221770000002').waitFor();
+  console.log('→ 2 propriétaire ajoute le vétérinaire dans « Gestion des utilisateurs » et reçoit un code');
+  await a.page.getByRole('link', { name: /Gestion des utilisateurs/ }).click();
+  await a.page.getByRole('heading', { name: 'Gestion des utilisateurs' }).waitFor();
+  await a.page.getByRole('link', { name: '+ Ajouter un utilisateur' }).click();
+  await a.page.getByLabel('Nom de la personne').fill('Dr Sy');
+  await a.page.getByLabel('Fonction dans la ferme').fill('Vétérinaire');
+  await a.page.getByLabel('Téléphone', { exact: true }).fill('77 000 00 02');
+  await a.page.getByLabel('Profil de départ').selectOption({ label: 'Vétérinaire' });
+  // Le profil coche des fonctions ; on en décoche une pour vérifier que les cases sont libres.
+  await a.page.getByLabel('Tout cocher : Finances').check();
+  await a.page.getByLabel('Tout cocher : Finances').uncheck();
+  if (process.env.CAPTURES) await a.page.screenshot({ path: `${process.env.CAPTURES}/u1.png`, fullPage: true });
+  await a.page.getByRole('button', { name: 'Ajouter et obtenir le code' }).click();
+  await a.page.getByRole('heading', { name: 'Code de connexion' }).waitFor();
+  const codeInvitation = (await a.page.locator('.gros-code').innerText()).trim();
+  if (process.env.CAPTURES) await a.page.screenshot({ path: `${process.env.CAPTURES}/u2.png`, fullPage: true });
+  assert.match(codeInvitation, /^\d{6}$/);
 
-  console.log('→ 3 vétérinaire : retrouve l’élevage sur un autre téléphone');
+  console.log('→ 3 vétérinaire : se connecte avec le code donné, sans SMS, sur un autre téléphone');
   await v.page.goto(`http://localhost:${PORT_WEB}/`);
   await v.page.getByText('Bienvenue sur Digitalab').waitFor();
   await v.page.getByRole('link', { name: /J’ai déjà un compte/ }).click();
-  await connecter(v.page, '77 000 00 02');
+  await v.page.getByLabel('Votre numéro de téléphone').fill('77 000 00 02');
+  await v.page.getByLabel('Adresse du serveur').fill(URL_API);
+  await v.page.getByRole('button', { name: 'J’ai déjà un code donné par mon administrateur' }).click();
+  await v.page.getByLabel('Code reçu').fill(codeInvitation);
+  await v.page.getByRole('button', { name: 'Valider' }).click();
   await v.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   await voir(v.page, /20\s+animaux/);
+  // Son menu ne montre que ses modules : pas de finances, pas de quarantaine d'arrivée.
+  assert.equal(await v.page.getByRole('navigation').getByRole('link', { name: /Finances/ }).count(), 0);
+  assert.equal(await v.page.getByRole('banner').getByRole('link', { name: 'Finances' }).count(), 0);
 
   console.log('→ 4 la saisie du propriétaire arrive chez le vétérinaire');
   await a.page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
@@ -110,20 +130,32 @@ try {
   await v.page.getByRole('navigation').getByRole('link', { name: /Accueil/ }).click();
   await voir(v.page, /9\s+œufs aujourd’hui/);
 
-  console.log('→ 5 le vétérinaire est en lecture seule');
+  console.log('→ 5 les droits sont appliqués : pas de saisie de ponte, pas de finances, et les chiffres ne lui sont même pas envoyés');
   await v.page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
-  await v.page.getByRole('link', { name: /Ponte du jour/ }).click();
-  await v.page.locator('.nombre input').first().fill('4');
-  await v.page.getByRole('button', { name: 'Enregistrer' }).click();
-  await v.page.getByText('Ponte enregistrée').waitFor();
-  await synchroniser(v.page);
-  assert.match(await v.texte(), /consulter l’élevage, pas de le modifier/);
+  await v.page.getByRole('heading', { name: 'Que voulez-vous noter ?' }).waitFor();
+  assert.doesNotMatch(await v.texte(), /Ponte du jour|Dépense|Recette/);
+  assert.match(await v.texte(), /Problème de santé/);
+  await v.page.evaluate(() => { window.location.hash = '#/saisie/ponte'; });
+  await v.page.getByRole('heading', { name: 'Accès non autorisé' }).waitFor();
+  await v.page.evaluate(() => { window.location.hash = '#/finances'; });
+  await v.page.getByRole('heading', { name: 'Accès non autorisé' }).waitFor();
+  // Le propriétaire note une recette ; elle ne doit jamais arriver sur le téléphone du vétérinaire.
+  await a.page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
+  await a.page.getByRole('link', { name: /Recette/ }).click();
+  await a.page.getByLabel('Montant (FCFA)').fill('5000');
+  await a.page.getByRole('button', { name: 'Enregistrer' }).click();
+  await a.page.getByText('Résultat du mois').waitFor();
   await synchroniser(a.page);
-  await a.page.getByRole('navigation').getByRole('link', { name: /Accueil/ }).click();
-  await voir(a.page, /9\s+œufs aujourd’hui/);
-  assert.doesNotMatch(await a.texte(), /13\s+œufs/);
+  await synchroniser(v.page);
+  const compte = (page, table) => page.evaluate((t) => new Promise((resolve) => {
+    const r = indexedDB.open('digitalab');
+    r.onsuccess = () => { const q = r.result.transaction(t).objectStore(t).count(); q.onsuccess = () => resolve(q.result); };
+  }), table);
+  assert.equal(await compte(a.page, 'operations'), 1);
+  assert.equal(await compte(v.page, 'operations'), 0);
+  assert.equal(await compte(v.page, 'paiements'), 0);
 
-  // (le vétérinaire garde chez lui sa propre saisie de 4 œufs : 9 + 4 + 2 = 15)
+  // (le vétérinaire ne saisit pas de ponte : 9 + 2 = 11)
   console.log('→ 6 hors connexion, la saisie du propriétaire attend le retour du réseau');
   await a.page.context().setOffline(true);
   await a.page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();
@@ -135,10 +167,10 @@ try {
   await synchroniser(a.page);
   await synchroniser(v.page);
   await v.page.getByRole('navigation').getByRole('link', { name: /Accueil/ }).click();
-  await voir(v.page, /15\s+œufs aujourd’hui/);
+  await voir(v.page, /11\s+œufs aujourd’hui/);
 
   assert.deepEqual(erreurs, []);
-  console.log('E2E SYNCHRO OK : compte par code, invitation, second appareil, saisie partagée, lecture seule, reprise après coupure');
+  console.log('E2E SYNCHRO OK : compte par code, utilisateur ajouté avec code de connexion, droits appliqués (menus, pages, données non envoyées), saisie partagée, reprise après coupure');
 } catch (e) {
   await a.page.screenshot({ path: new URL('./echec-a.png', import.meta.url).pathname }).catch(() => {});
   await v.page.screenshot({ path: new URL('./echec-v.png', import.meta.url).pathname }).catch(() => {});

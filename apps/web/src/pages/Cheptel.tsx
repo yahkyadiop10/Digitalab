@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Si } from '../components/Si';
 import { ajouterJours, delaisEnCours, jourLocal, quarantainesEnCours, type Lot } from '@digitalab/core';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
@@ -23,8 +24,8 @@ export function ListeCheptel({ elevage }: { elevage: Elevage }) {
           </span>
         </a>
       ))}
-      <a className="bouton" href="#/cheptel/nouveau">+ Nouveau lot</a>
-      <a className="bouton alt" href="#/quarantaine">🚧 Zone de quarantaine{donnees.quarantaines.filter((q) => !q.sortie).length > 0 ? ` (${donnees.quarantaines.filter((q) => !q.sortie).length})` : ''}</a>
+      <Si elevage={elevage} droit="cheptel.lots"><a className="bouton" href="#/cheptel/nouveau">+ Nouveau lot</a></Si>
+      <Si elevage={elevage} droit="quarantaine.voir"><a className="bouton alt" href="#/quarantaine">🚧 Zone de quarantaine{donnees.quarantaines.filter((q) => !q.sortie).length > 0 ? ` (${donnees.quarantaines.filter((q) => !q.sortie).length})` : ''}</a></Si>
       {archives.length > 0 && <p className="muet">{archives.length} lot(s) archivé(s).</p>}
     </>
   );

@@ -1,9 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { CATEGORIES_PAIE, LIBELLES_MODES, MODES_PAIEMENT, jourLocal, moisDecale, suiviSalaires, type ModePaiement, type NatureSalaire, type OperationFinanciere } from '@digitalab/core';
+import { Si } from '../components/Si';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { ErreurSaisie, repo } from '../repo';
+import { profilDe } from '../droits';
 import { aller } from '../route';
+import { EnteteElevage } from './Operation';
 import type { Elevage } from '../useElevage';
 
 const nomMois = (p: string) => new Date(`${p}-15T12:00:00`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
@@ -43,18 +46,20 @@ export function PageSalaires({ elevage, moisInitial }: { elevage: Elevage; moisI
           <div className="ligne"><span>Déjà versé (salaire et avances)</span><b className="montant">{formatMontant(s.verse)}</b></div>
           {s.primes > 0 && <div className="ligne"><span>Primes</span><b className="montant">{formatMontant(s.primes)}</b></div>}
           <div className="ligne"><span><b>{LIBELLE_STATUT[s.statut]}</b></span><b>{s.reste > 0 ? `reste ${formatMontant(s.reste)}` : ''}</b></div>
-          <div className="rangee">
-            {s.reste > 0 && <a className="bouton court" href={`#/finances/salaires/payer/${s.employe.id}?mois=${mois}&nature=salaire`}>Payer le salaire</a>}
-            <a className="bouton alt court" href={`#/finances/salaires/payer/${s.employe.id}?mois=${mois}&nature=avance`}>Avance</a>
-            <a className="bouton alt court" href={`#/finances/salaires/payer/${s.employe.id}?mois=${mois}&nature=prime`}>Prime</a>
-          </div>
+          <Si elevage={elevage} droit="salaires.payer">
+            <div className="rangee">
+              {s.reste > 0 && <a className="bouton court" href={`#/finances/salaires/payer/${s.employe.id}?mois=${mois}&nature=salaire`}>Payer le salaire</a>}
+              <a className="bouton alt court" href={`#/finances/salaires/payer/${s.employe.id}?mois=${mois}&nature=avance`}>Avance</a>
+              <a className="bouton alt court" href={`#/finances/salaires/payer/${s.employe.id}?mois=${mois}&nature=prime`}>Prime</a>
+            </div>
+          </Si>
           <div className="actions">
             <a className="lien" href={`#/finances/salaires/bulletin/${s.employe.id}/${mois}`}>Bulletin du mois</a>
-            <a className="lien" href={`#/finances/salaires/employe/${s.employe.id}`}>Modifier la fiche</a>
+            <Si elevage={elevage} droit="salaires.gerer"><a className="lien" href={`#/finances/salaires/employe/${s.employe.id}`}>Modifier la fiche</a></Si>
           </div>
         </div>
       ))}
-      <a className="bouton alt" href="#/finances/salaires/employe">+ Ajouter un employé</a>
+      <Si elevage={elevage} droit="salaires.gerer"><a className="bouton alt" href="#/finances/salaires/employe">+ Ajouter un employé</a></Si>
     </>
   );
 }
@@ -151,7 +156,7 @@ export function PageBulletin({ elevage, employeId, periode }: { elevage: Elevage
     .sort((a, b) => a.date.localeCompare(b.date));
   const modes = new Map(elevage.paiements.map((p) => [p.operationId, p.mode]));
   const suivi = suiviSalaires(elevage.employes, elevage.operations, periode).find((s) => s.employe.id === employeId);
-  const { nomElevage, identite } = elevage.reglages;
+  const profil = profilDe(elevage);
   const total = versements.reduce((a, o) => a + o.montant, 0);
 
   return (
@@ -162,12 +167,7 @@ export function PageBulletin({ elevage, employeId, periode }: { elevage: Elevage
       </div>
       <article className="document">
         <header className="doc-entete">
-          <div>
-            <h1>{nomElevage || 'Mon élevage'}</h1>
-            {identite.adresse && <p>{identite.adresse}</p>}
-            {identite.telephone && <p>Tél. {identite.telephone}</p>}
-            {identite.ninea && <p>NINEA / RC : {identite.ninea}</p>}
-          </div>
+          <EnteteElevage profil={profil} />
           <div className="doc-titre">
             <h2>RÉCAPITULATIF DE PAIE</h2>
             <p>{nomMois(periode)}</p>

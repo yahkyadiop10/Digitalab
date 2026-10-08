@@ -267,6 +267,27 @@ describe('finances', () => {
     await expect(repo.payerSalaire({ employeId: e, periode: 'octobre', montant: 1000, nature: 'salaire' })).rejects.toBeInstanceOf(ErreurSaisie);
   });
 
+  it('une dépense saisie sans droit de validation n’entre dans aucun chiffre avant d’être validée', async () => {
+    const d = await repo.ajouterOperation({ sens: 'depense', categorie: 'materiel', montant: 20000, aValider: true, paiementAValider: true });
+    expect(await base.operations.get(d.id)).toMatchObject({ statut: 'a_valider' });
+    const [p] = await base.paiements.where('operationId').equals(d.id).toArray();
+    expect(p).toMatchObject({ statut: 'a_valider', montant: 20000 });
+    await repo.valider({ table: 'operations', id: d.id });
+    await repo.valider({ table: 'paiements', id: p!.id });
+    expect(await base.operations.get(d.id)).toMatchObject({ statut: 'validee' });
+    expect((await base.paiements.get(p!.id))?.statut).toBe('validee');
+  });
+
+  it('enregistre le profil de l’élevage : coordonnées et logo, une seule fiche partagée', async () => {
+    await repo.enregistrerProfil({ nom: ' Ferme Sow ', adresse: 'Thiès', ninea: '12345' });
+    await repo.enregistrerProfil({ logo: 'data:image/png;base64,AAAA' });
+    expect(await base.profil.count()).toBe(1);
+    expect(await base.profil.get('elevage')).toMatchObject({ nom: 'Ferme Sow', adresse: 'Thiès', ninea: '12345', logo: 'data:image/png;base64,AAAA' });
+    await repo.enregistrerProfil({ logo: null });
+    expect((await base.profil.get('elevage'))?.logo).toBeUndefined();
+    await expect(repo.enregistrerProfil({ logo: `data:image/png;base64,${'A'.repeat(41_000)}` })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
   it('contrôle la fiche d’un employé et d’un client', async () => {
     await expect(repo.enregistrerEmploye({ nom: '', salaire: 1000 })).rejects.toBeInstanceOf(ErreurSaisie);
     await expect(repo.enregistrerEmploye({ nom: 'A', salaire: 0 })).rejects.toBeInstanceOf(ErreurSaisie);

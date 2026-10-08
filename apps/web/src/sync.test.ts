@@ -1,12 +1,13 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ChangementSync, DemandeSync, ReponseSync, RoleMembre } from '@digitalab/core';
+import { droitsEffectifs, peutEcrireTable, type ChangementSync, type DemandeSync, type DroitsMembre, type ReponseSync, type RoleMembre } from '@digitalab/core';
 import { BaseElevage } from './db';
 import { creerRepo } from './repo';
 import { creerSynchro, type Fetch } from './sync';
 
 /** Un petit serveur en mémoire qui applique la même règle que le vrai : la version la plus récente l'emporte. */
 function fauxServeur(limite = 1000) {
+  let moi: DroitsMembre = { role: 'proprietaire', droits: droitsEffectifs('proprietaire', null), zones: [] };
   const lignes = new Map<string, { seq: number; ch: ChangementSync }>();
   let seq = 0;
   let horsLigne = false;
@@ -18,7 +19,12 @@ function fauxServeur(limite = 1000) {
     const d = JSON.parse(String(init?.body)) as DemandeSync;
     appels.push(d);
     let ecartes = 0;
+    let refuses = 0;
     for (const ch of d.changements) {
+      if (!peutEcrireTable(moi.droits, ch.table)) {
+        refuses += 1;
+        continue;
+      }
       const cle = `${ch.table}/${ch.enregistrement.id}`;
       const existant = lignes.get(cle);
       if (!existant || existant.ch.enregistrement.misAJour < ch.enregistrement.misAJour) lignes.set(cle, { seq: ++seq, ch });
@@ -26,17 +32,17 @@ function fauxServeur(limite = 1000) {
     }
     const apres = [...lignes.values()].filter((l) => l.seq > d.depuisSeq).sort((a, b) => a.seq - b.seq);
     const gardees = apres.slice(0, limite);
-    const rep: ReponseSync = { seq: gardees.at(-1)?.seq ?? d.depuisSeq, changements: gardees.map((l) => l.ch), reste: apres.length > limite, ecartes };
+    const rep: ReponseSync = { seq: gardees.at(-1)?.seq ?? d.depuisSeq, changements: gardees.map((l) => l.ch), reste: apres.length > limite, ecartes, refuses, moi };
     return new Response(JSON.stringify(rep), { status: 200 });
   };
-  return { fetch: fetchFictif, appels, lignes, coupure: (v: boolean) => { horsLigne = v; }, refuser: (r: typeof refus) => { refus = r; } };
+  return { fetch: fetchFictif, appels, lignes, coupure: (v: boolean) => { horsLigne = v; }, definirDroits: (d: DroitsMembre) => { moi = d; }, refuser: (r: typeof refus) => { refus = r; } };
 }
 
 let n = 0;
 async function appareil(serveur: ReturnType<typeof fauxServeur>, role: RoleMembre = 'proprietaire') {
   const base = new BaseElevage(`sync-${++n}`);
   const synchro = creerSynchro(base, serveur.fetch);
-  await synchro.lier('http://serveur.test', 'jeton', '+221771234567', { id: 'org-1', nom: 'Ferme test', role });
+  await synchro.lier('http://serveur.test', 'jeton', '+221771234567', { id: 'org-1', nom: 'Ferme test', role, droits: droitsEffectifs(role, null), zones: [] });
   return { base, repo: creerRepo(base), synchro };
 }
 
@@ -143,6 +149,33 @@ describe('synchronisation côté appareil', () => {
     expect(r).toMatchObject({ etat: 'ok', envoyes: 0 });
     expect(serveur.appels.at(-1)?.changements).toEqual([]);
     expect([...serveur.lignes.keys()].some((k) => k.startsWith('logements/'))).toBe(false);
+  });
+
+  it('repart du début et met à jour ses droits quand l’administrateur les change', async () => {
+    const a = await appareil(serveur);
+    await a.repo.creerLot({ nom: 'Soie', especeCode: 'poule', effectif: 5 });
+    await a.synchro.synchroniser();
+    const b = await appareil(serveur, 'soigneur');
+    serveur.definirDroits({ role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
+    await b.synchro.synchroniser();
+    const seqAvant = (await b.synchro.lire())!.derniereSeq;
+    expect(seqAvant).toBeGreaterThan(0);
+    serveur.definirDroits({ role: 'personnalise', fonction: 'Responsable bâtiment A', droits: ['cheptel.voir', 'finances.voir_recettes'], zones: ['bat-a'] });
+    await b.synchro.synchroniser();
+    expect(serveur.appels.slice(-2).map((x) => x.depuisSeq)).toEqual([seqAvant, 0]);
+    expect(await b.synchro.lire()).toMatchObject({ role: 'personnalise', fonction: 'Responsable bâtiment A', droits: ['cheptel.voir', 'finances.voir_recettes'], zones: ['bat-a'] });
+  });
+
+  it('n’envoie pas les tables que les droits ne permettent pas d’écrire', async () => {
+    const a = await appareil(serveur, 'soigneur');
+    serveur.definirDroits({ role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
+    await a.repo.ajouterPonte({ lotId: 'x', nombre: 3 });
+    await a.repo.ajouterOperation({ sens: 'depense', categorie: 'soins', montant: 100 });
+    await a.synchro.synchroniser();
+    const envoyes = serveur.appels.flatMap((x) => x.changements.map((c) => c.table));
+    expect(envoyes).toContain('pontes');
+    expect(envoyes).not.toContain('operations');
+    expect(envoyes).not.toContain('paiements');
   });
 
   it('mémorise un refus du serveur (session expirée) pour l’afficher', async () => {

@@ -2,7 +2,9 @@ import { cloneElement, createContext, isValidElement, useCallback, useContext, u
 import type { Alerte, Niveau } from '@digitalab/core';
 import { NIVEAUX, messageAlerte, type Noms } from '../i18n/fr';
 import { repo } from '../repo';
+import { aDesTuilesDeSaisie, aLeModule } from '../droits';
 import { useRoute } from '../route';
+import type { Elevage } from '../useElevage';
 
 /* ---------- Notifications avec « Annuler » ---------- */
 interface Notif {
@@ -122,12 +124,19 @@ const ONGLETS: readonly { cle: string; icone: string; libelle: string; bureau?: 
   { cle: 'finances', icone: '💰', libelle: 'Finances', bureau: true },
 ];
 
-export function Navigation() {
+export function Navigation({ elevage }: { elevage: Pick<Elevage, 'moi'> }) {
   const { segments } = useRoute();
   const actif = segments[0] ?? 'accueil';
+  // On ne montre un onglet qu'à la personne qui a au moins une fonction dans ce module.
+  const visibles = ONGLETS.filter((o) => {
+    if (o.cle === 'accueil') return true;
+    if (o.cle === 'saisie') return aDesTuilesDeSaisie(elevage);
+    if (o.cle === 'finances') return aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires');
+    return aLeModule(elevage, o.cle);
+  });
   return (
     <nav aria-label="Navigation principale">
-      {ONGLETS.map((o) => (
+      {visibles.map((o) => (
         <a key={o.cle} href={`#/${o.cle}`} className={`${actif === o.cle ? 'actif' : ''}${o.bureau ? ' bureau' : ''}`.trim()} aria-current={actif === o.cle ? 'page' : undefined}>
           <b aria-hidden="true">{o.icone}</b>
           {o.libelle}
@@ -146,7 +155,7 @@ export function Retour({ vers, libelle = 'Retour' }: { vers: string; libelle?: s
 }
 
 /** Boutons de l'en-tête : alertes (avec compteur) et réglages. */
-export function OutilsEntete({ nbAlertes, compte = null }: { nbAlertes: number; compte?: { erreur: boolean } | null }) {
+export function OutilsEntete({ nbAlertes, compte = null, finances = true }: { nbAlertes: number; compte?: { erreur: boolean } | null; finances?: boolean }) {
   const { segments } = useRoute();
   const actif = segments[0];
   return (
@@ -155,7 +164,7 @@ export function OutilsEntete({ nbAlertes, compte = null }: { nbAlertes: number; 
         <span aria-hidden="true">🔔</span>
         {nbAlertes > 0 && <i className="pastille">{nbAlertes}</i>}
       </a>
-      <a href="#/finances" aria-label="Finances" className={`mobile${actif === 'finances' ? ' actif' : ''}`}><span aria-hidden="true">💰</span></a>
+      {finances && <a href="#/finances" aria-label="Finances" className={`mobile${actif === 'finances' ? ' actif' : ''}`}><span aria-hidden="true">💰</span></a>}
       {compte && (
         <a href="#/compte" aria-label={compte.erreur ? 'Compte et synchronisation : action requise' : 'Compte et synchronisation'} className={actif === 'compte' ? 'actif' : ''}>
           <span aria-hidden="true">☁️</span>

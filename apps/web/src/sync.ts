@@ -1,4 +1,4 @@
-import { normaliserTelephone, ROLES, TABLES_SYNCHRONISEES, type ChangementSync, type DemandeSync, type EnregistrementSync, type ReponseSync, type RoleMembre, type TableSynchronisee } from '@digitalab/core';
+import { normaliserTelephone, TABLES_SYNCHRONISEES, tablesEcrivables, type ChangementSync, type DemandeSync, type DroitsMembre, type EnregistrementSync, type ReponseSync, type RoleMembre, type TableSynchronisee } from '@digitalab/core';
 import { db, type BaseElevage, type Connexion } from './db';
 
 /** Le serveur a répondu par un refus (mauvais code, accès retiré, session expirée…). */
@@ -13,21 +13,38 @@ export class ErreurReseau extends Error {}
 
 export type Fetch = typeof fetch;
 
-export interface OrganisationServeur {
+export interface OrganisationServeur extends DroitsMembre {
   id: string;
   nom: string;
-  role: RoleMembre;
 }
 
 export interface Membre {
   telephone: string;
   role: RoleMembre;
-  actif: boolean;
   nom: string | null;
+  fonction: string | null;
+  droits: string[];
+  zones: string[];
+  /** S'est déjà connecté au moins une fois. */
+  actif: boolean;
+  /** Un code de connexion donné par l'administrateur attend d'être utilisé. */
+  invitationEnCours: boolean;
+}
+
+/** Ce que l'administrateur remplit pour ajouter ou modifier une personne. */
+export interface FicheMembre {
+  telephone: string;
+  nom?: string;
+  fonction?: string;
+  role?: RoleMembre;
+  droits?: string[];
+  zones?: string[];
+  /** Donne un nouveau code de connexion (téléphone perdu, code oublié). */
+  nouveauCode?: boolean;
 }
 
 export type ResultatSync =
-  | { etat: 'ok'; envoyes: number; recus: number; ecartes: number }
+  | { etat: 'ok'; envoyes: number; recus: number; ecartes: number; refuses: number }
   | { etat: 'hors_ligne' }
   | { etat: 'non_connecte' }
   | { etat: 'refuse'; message: string };
@@ -102,9 +119,11 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
     return recus;
   }
 
-  async function modifications(depuis: number): Promise<ChangementSync[]> {
+  async function modifications(depuis: number, droits: string[]): Promise<ChangementSync[]> {
     const out: ChangementSync[] = [];
+    const permises = new Set<string>(tablesEcrivables(droits));
     for (const t of TABLES_SYNCHRONISEES) {
+      if (!permises.has(t)) continue;
       const lignes = await base.table<EnregistrementSync, string>(t).filter((r) => r.misAJour >= depuis).toArray();
       for (const enregistrement of lignes) out.push({ table: t, enregistrement });
     }
@@ -117,13 +136,15 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
     if (!c) return { etat: 'non_connecte' };
     const chemin = `/v1/organisations/${c.organisationId}/sync`;
     try {
-      const aEnvoyer = ROLES[c.role].ecriture ? await modifications(c.dernierEnvoi) : [];
+      const aEnvoyer = await modifications(c.dernierEnvoi, c.droits);
       const lots: ChangementSync[][] = [];
       for (let i = 0; i < aEnvoyer.length; i += TAILLE_LOT) lots.push(aEnvoyer.slice(i, i + TAILLE_LOT));
       if (lots.length === 0) lots.push([]);
       let seq = c.derniereSeq;
       let recus = 0;
       let ecartes = 0;
+      let refuses = 0;
+      let connus = [...c.droits].sort().join(',');
       for (const lot of lots) {
         let envoi = lot;
         let rep: ReponseSync;
@@ -133,8 +154,25 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
           envoi = [];
           recus += await appliquer(rep.changements);
           ecartes += rep.ecartes;
+          refuses += rep.refuses ?? 0;
           seq = rep.seq;
-          await base.connexion.update('serveur', { derniereSeq: seq });
+          // Si l'administrateur a changé les droits, ce que le serveur renvoie change : on repart du début pour récupérer ce qui devient visible.
+          const nouveaux = rep.moi ? [...rep.moi.droits].sort().join(',') : connus;
+          if (nouveaux !== connus) {
+            connus = nouveaux;
+            seq = 0;
+            rep = { ...rep, reste: true };
+          }
+          await base.connexion.where('cle').equals('serveur').modify((ligne) => {
+            ligne.derniereSeq = seq;
+            if (rep.moi) {
+              ligne.role = rep.moi.role;
+              ligne.droits = rep.moi.droits;
+              ligne.zones = rep.moi.zones;
+              if (rep.moi.fonction) ligne.fonction = rep.moi.fonction;
+              else delete ligne.fonction;
+            }
+          });
         } while (rep.reste);
       }
       // Mise à jour ciblée : le nom de l'élevage ou le rôle ont pu changer pendant l'échange.
@@ -144,7 +182,7 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
         ligne.derniereSync = Date.now();
         delete ligne.erreur;
       });
-      return { etat: 'ok', envoyes: aEnvoyer.length, recus, ecartes };
+      return { etat: 'ok', envoyes: aEnvoyer.length, recus, ecartes, refuses };
     } catch (e) {
       if (e instanceof ErreurReseau) return { etat: 'hors_ligne' };
       if (e instanceof ErreurServeur) {
@@ -188,7 +226,10 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
 
     /** Relie cet appareil à un élevage du serveur ; la première synchronisation envoie ce qui existe déjà ici et récupère le reste. */
     async lier(url: string, jeton: string, telephone: string, org: OrganisationServeur): Promise<void> {
-      await base.connexion.put({ cle: 'serveur', url: url.replace(/\/+$/, ''), jeton, telephone, organisationId: org.id, organisationNom: org.nom, role: org.role, derniereSeq: 0, dernierEnvoi: 0 });
+      await base.connexion.put({
+        cle: 'serveur', url: url.replace(/\/+$/, ''), jeton, telephone, organisationId: org.id, organisationNom: org.nom,
+        role: org.role, droits: org.droits, zones: org.zones, ...(org.fonction ? { fonction: org.fonction } : {}), derniereSeq: 0, dernierEnvoi: 0,
+      });
       await base.reglages.put({ cle: 'demarrageFait', valeur: true });
       const local = await base.reglages.get('nomElevage');
       const nomLocal = typeof local?.valeur === 'string' ? local.valeur.trim() : '';
@@ -223,16 +264,24 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       return (await appeler<{ membres: Membre[] }>(c.url, `/v1/organisations/${c.organisationId}/membres`, { jeton: c.jeton })).membres;
     },
 
-    async inviter(telephone: string, role: Exclude<RoleMembre, 'proprietaire'>): Promise<void> {
+    /** Ajoute ou modifie une personne. Renvoie le code de connexion à lui donner, tant qu'elle ne s'est pas encore connectée. */
+    async enregistrerMembre(fiche: FicheMembre): Promise<{ telephone: string; codeInvitation?: string }> {
       const c = await lire();
       if (!c) throw new ErreurReseau('Non connecté.');
-      await appeler(c.url, `/v1/organisations/${c.organisationId}/membres`, { jeton: c.jeton, corps: { telephone, role } });
+      return appeler(c.url, `/v1/organisations/${c.organisationId}/membres`, { jeton: c.jeton, corps: fiche });
     },
 
     async retirer(telephone: string): Promise<void> {
       const c = await lire();
       if (!c) throw new ErreurReseau('Non connecté.');
       await appeler(c.url, `/v1/organisations/${c.organisationId}/membres/${encodeURIComponent(telephone)}`, { jeton: c.jeton, methode: 'DELETE' });
+    },
+
+    /** Déconnecte tous les appareils d'une personne. */
+    async deconnecterAppareils(telephone: string): Promise<void> {
+      const c = await lire();
+      if (!c) throw new ErreurReseau('Non connecté.');
+      await appeler(c.url, `/v1/organisations/${c.organisationId}/membres/${encodeURIComponent(telephone)}/deconnexion`, { jeton: c.jeton, methode: 'POST', corps: {} });
     },
 
     synchroniser,

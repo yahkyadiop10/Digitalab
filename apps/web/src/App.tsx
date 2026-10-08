@@ -10,19 +10,33 @@ import { Demarrage } from './pages/Demarrage';
 import { FicheQuarantaine, FormArrivee, PageQuarantaine } from './pages/Quarantaine';
 import { PageCarnet, FicheTiers } from './pages/Carnet';
 import { FormOperation, PageFinances } from './pages/Finances';
-import { PageOperation, PageFacture } from './pages/Operation';
+import { PageOperation, PageFacture, PageRecu } from './pages/Operation';
 import { FormEmploye, FormPaie, PageBulletin, PageSalaires } from './pages/Paie';
 import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
 import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
 import { PageCompte, useConnexion } from './pages/Compte';
+import { FormUtilisateur, PageUtilisateurs } from './pages/Utilisateurs';
 import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
+import { aLeModule, droitsRequis, peutUn, profilDe } from './droits';
 import { useRoute } from './route';
 import { synchro } from './sync';
 import { useElevage, type Elevage } from './useElevage';
 
+function Refuse() {
+  return (
+    <div className="carte">
+      <h2>Accès non autorisé</h2>
+      <p className="muet">Votre profil ne permet pas d’ouvrir cette page. Si c’est une erreur, demandez à l’administrateur de l’élevage de vous accorder cette fonction.</p>
+      <a className="bouton" href="#/accueil">Retour à l’accueil</a>
+    </div>
+  );
+}
+
 function Page({ elevage }: { elevage: Elevage }) {
   const { segments, params } = useRoute();
+  const requis = droitsRequis(segments);
+  if (requis && !peutUn(elevage, requis)) return <Refuse />;
   const section = segments[0] ?? 'accueil';
   const a = segments[1];
   switch (section) {
@@ -50,6 +64,7 @@ function Page({ elevage }: { elevage: Elevage }) {
       return a ? <FicheQuarantaine elevage={elevage} id={a} /> : <PageQuarantaine elevage={elevage} />;
     case 'finances':
       if (a === 'depense' || a === 'recette') return <FormOperation elevage={elevage} sens={a} lotInitial={params.get('lot')} />;
+      if (a === 'recu' && segments[2]) return <PageRecu elevage={elevage} id={segments[2]} />;
       if (a === 'op' && segments[2]) return segments[3] === 'facture' ? <PageFacture elevage={elevage} id={segments[2]} /> : <PageOperation elevage={elevage} id={segments[2]} />;
       if (a === 'carnet') return segments[2] === 'nouveau' ? <FicheTiers elevage={elevage} /> : segments[2] ? <FicheTiers elevage={elevage} id={segments[2]} /> : <PageCarnet elevage={elevage} />;
       if (a === 'salaires') {
@@ -66,6 +81,8 @@ function Page({ elevage }: { elevage: Elevage }) {
       return <Alertes elevage={elevage} />;
     case 'compte':
       return <PageCompte />;
+    case 'utilisateurs':
+      return a ? <FormUtilisateur elevage={elevage} {...(a === 'nouveau' ? {} : { telephone: decodeURIComponent(a) })} /> : <PageUtilisateurs elevage={elevage} />;
     case 'reglages':
       return <Reglages elevage={elevage} />;
     default:
@@ -105,18 +122,20 @@ function Application() {
     if (route.segments[0] === 'compte') return <FournisseurNotif><main><PageCompte /></main></FournisseurNotif>;
     return <FournisseurNotif><Demarrage /></FournisseurNotif>;
   }
+  const profil = profilDe(elevage);
   const nbAlertes = elevage.alertes.filter((a) => !a.priseEnCharge).length;
   return (
     <FournisseurNotif>
       <header>
+        {profil.logo ? <img className="logo-entete" src={profil.logo} alt="" /> : null}
         <h1>Digitalab</h1>
-        <small>{elevage.reglages.nomElevage || 'Mon élevage'}</small>
-        <OutilsEntete nbAlertes={nbAlertes} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
+        <small>{profil.nom}</small>
+        <OutilsEntete nbAlertes={nbAlertes} finances={aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires')} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
       </header>
       <main>
         <Page elevage={elevage} />
       </main>
-      <Navigation />
+      <Navigation elevage={elevage} />
     </FournisseurNotif>
   );
 }

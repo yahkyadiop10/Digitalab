@@ -1,20 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ROLES, type RoleMembre } from '@digitalab/core';
+import { LIBELLES_PROFILS, normaliserTelephone, tablesEcrivables } from '@digitalab/core';
 import { Champ, Retour, useNotifier } from '../components/ui';
 import { db, type Connexion } from '../db';
 import { aller } from '../route';
-import { ErreurReseau, ErreurServeur, URL_SERVEUR_DEFAUT, synchro, type Membre, type OrganisationServeur, type ResultatSync } from '../sync';
+import { ErreurReseau, ErreurServeur, URL_SERVEUR_DEFAUT, synchro, type OrganisationServeur, type ResultatSync } from '../sync';
 
 export const useConnexion = (): Connexion | undefined | null => useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
-
-const ROLES_INVITABLES: Exclude<RoleMembre, 'proprietaire'>[] = ['soigneur', 'veterinaire', 'lecteur'];
-const EXPLICATION_ROLE: Record<RoleMembre, string> = {
-  proprietaire: 'Fait tout, invite et retire des personnes.',
-  soigneur: 'Saisit et modifie (ponte, aliment, décès, soins…).',
-  veterinaire: 'Consulte tout l’élevage, sans rien modifier.',
-  lecteur: 'Consulte seulement.',
-};
 
 function messageErreur(e: unknown): string {
   if (e instanceof ErreurReseau) return 'Pas de connexion au serveur. Vérifiez votre réseau et l’adresse du serveur.';
@@ -35,7 +27,7 @@ export function depuisQuand(instant: number | undefined, maintenant = Date.now()
 export function resumeSync(r: ResultatSync): string {
   switch (r.etat) {
     case 'ok':
-      return r.envoyes + r.recus === 0 ? 'Tout est à jour ✓' : `Synchronisé ✓ (${r.envoyes} envoyé${r.envoyes > 1 ? 's' : ''}, ${r.recus} reçu${r.recus > 1 ? 's' : ''})`;
+      return `${r.envoyes + r.recus === 0 ? 'Tout est à jour ✓' : `Synchronisé ✓ (${r.envoyes} envoyé${r.envoyes > 1 ? 's' : ''}, ${r.recus} reçu${r.recus > 1 ? 's' : ''})`}${r.refuses > 0 ? ` · ${r.refuses} saisie${r.refuses > 1 ? 's' : ''} refusée${r.refuses > 1 ? 's' : ''} : vos droits ne le permettent pas.` : ''}`;
     case 'hors_ligne':
       return 'Pas de réseau : vos saisies restent sur l’appareil et partiront plus tard.';
     case 'non_connecte':
@@ -114,7 +106,7 @@ function FormConnexion() {
         <p>Vous avez accès à plusieurs élevages. Lequel utiliser sur cet appareil ?</p>
         {session.organisations.map((o) => (
           <button key={o.id} className="bouton alt" disabled={occupe} onClick={() => void executer(() => lier(session, o))}>
-            {o.nom} · {ROLES[o.role].libelle}
+            {o.nom} · {o.fonction ? `${o.fonction} · ` : ''}{LIBELLES_PROFILS[o.role]}
           </button>
         ))}
         {erreur && <p className="erreur" role="alert">{erreur}</p>}
@@ -141,10 +133,24 @@ function FormConnexion() {
           )}
           {erreur && <p className="erreur" role="alert">{erreur}</p>}
           <button className="bouton" disabled={occupe || !telephone.trim()}>{occupe ? 'Envoi…' : 'Recevoir un code'}</button>
+          <button
+            type="button"
+            className="lien"
+            onClick={() => {
+              const tel = normaliserTelephone(telephone);
+              if (!tel) return setErreur('Entrez d’abord votre numéro de téléphone.');
+              if (!url.trim()) return setErreur('Indiquez l’adresse du serveur.');
+              setErreur(null);
+              setTelephone(tel);
+              setEtape('code');
+            }}
+          >
+            J’ai déjà un code donné par mon administrateur
+          </button>
         </form>
       ) : (
         <form className="carte" onSubmit={valider}>
-          <p>Un code à 6 chiffres a été envoyé au <b>{telephone}</b>.</p>
+          <p>Entrez le code à 6 chiffres du <b>{telephone}</b> : celui reçu par SMS, ou celui que votre administrateur vous a donné.</p>
           {codeDemo && <p className="muet">Mode démonstration : le code est <b>{codeDemo}</b>.</p>}
           <Champ libelle="Code reçu">
             <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} required />
@@ -163,6 +169,8 @@ function Connecte({ connexion }: { connexion: Connexion }) {
   const [enCours, setEnCours] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => synchro.abonner((e) => setEnCours(e.enCours)), []);
+  const peutAdministrer = connexion.droits.includes('admin.utilisateurs');
+  const peutEcrire = tablesEcrivables(connexion.droits).length > 0;
 
   const lancer = async () => {
     setMessage(null);
@@ -179,92 +187,24 @@ function Connecte({ connexion }: { connexion: Connexion }) {
     <>
       <div className="carte">
         <div className="ligne"><span>Élevage</span><b>{connexion.organisationNom}</b></div>
-        <div className="ligne"><span>Votre rôle</span><b>{ROLES[connexion.role].libelle}</b></div>
+        <div className="ligne"><span>Votre profil</span><b>{connexion.fonction ? `${connexion.fonction} · ` : ''}{LIBELLES_PROFILS[connexion.role]}</b></div>
+        {connexion.zones.length > 0 && <div className="ligne"><span>Vos bâtiments</span><b>{connexion.zones.length} réservé{connexion.zones.length > 1 ? 's' : ''}</b></div>}
         <div className="ligne"><span>Votre numéro</span><b>{connexion.telephone}</b></div>
         <div className="ligne"><span>Dernière synchronisation</span><b>{depuisQuand(connexion.derniereSync)}</b></div>
         {connexion.erreur && <p className="erreur" role="alert">{connexion.erreur}</p>}
-        {!ROLES[connexion.role].ecriture && <p className="muet">Votre rôle permet de consulter l’élevage, pas de le modifier : ce que vous saisissez ici n’est pas envoyé.</p>}
+        {!peutEcrire && <p className="muet">Votre profil permet de consulter l’élevage, pas de le modifier : ce que vous saisissez ici n’est pas envoyé.</p>}
         <button className="bouton" onClick={() => void lancer()} disabled={enCours}>{enCours ? 'Synchronisation…' : 'Synchroniser maintenant'}</button>
         {message && <p role="status">{message}</p>}
       </div>
-      {connexion.role === 'proprietaire' && <Equipe />}
+      {peutAdministrer && (
+        <a className="carte ligne" href="#/utilisateurs" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <span>Gestion des utilisateurs<br /><small className="muet">Ajouter des personnes, choisir ce que chacune voit et fait</small></span>
+          <b aria-hidden="true">›</b>
+        </a>
+      )}
       <div className="carte">
         <button className="lien danger" onClick={() => void quitter()}>Se déconnecter de cet appareil</button>
       </div>
-    </>
-  );
-}
-
-function Equipe() {
-  const notifier = useNotifier();
-  const [membres, setMembres] = useState<Membre[] | null>(null);
-  const [erreur, setErreur] = useState<string | null>(null);
-  const [telephone, setTelephone] = useState('');
-  const [role, setRole] = useState<Exclude<RoleMembre, 'proprietaire'>>('soigneur');
-
-  const charger = async () => {
-    try {
-      setMembres(await synchro.membres());
-      setErreur(null);
-    } catch (e) {
-      setErreur(messageErreur(e));
-    }
-  };
-  useEffect(() => {
-    void charger();
-  }, []);
-
-  const inviter = async (e: FormEvent) => {
-    e.preventDefault();
-    try {
-      await synchro.inviter(telephone, role);
-      setTelephone('');
-      notifier('Personne ajoutée ✓');
-      await charger();
-    } catch (err) {
-      setErreur(messageErreur(err));
-    }
-  };
-
-  const retirer = async (m: Membre) => {
-    if (!window.confirm(`Retirer ${m.nom ?? m.telephone} de l’élevage ?`)) return;
-    try {
-      await synchro.retirer(m.telephone);
-      await charger();
-    } catch (err) {
-      setErreur(messageErreur(err));
-    }
-  };
-
-  return (
-    <>
-      <h2>Mon équipe</h2>
-      <div className="carte">
-        {membres === null && !erreur && <p className="muet">Chargement…</p>}
-        {membres?.map((m) => (
-          <div key={m.telephone} className="ligne">
-            <span>
-              {m.nom ?? m.telephone}
-              <br />
-              <small className="muet">{m.nom ? `${m.telephone} · ` : ''}{ROLES[m.role].libelle}{m.actif ? '' : ' · pas encore connecté'}</small>
-            </span>
-            {m.role !== 'proprietaire' && <button className="lien danger" onClick={() => void retirer(m)}>Retirer</button>}
-          </div>
-        ))}
-        {erreur && <p className="erreur" role="alert">{erreur}</p>}
-      </div>
-      <form className="carte" onSubmit={inviter}>
-        <p><b>Ajouter une personne</b></p>
-        <Champ libelle="Son numéro de téléphone" aide="Elle se connecte avec ce numéro et voit votre élevage.">
-          <input type="tel" inputMode="tel" placeholder="77 123 45 67" value={telephone} onChange={(e) => setTelephone(e.target.value)} required />
-        </Champ>
-        <Champ libelle="Son rôle" aide={EXPLICATION_ROLE[role]}>
-          <select value={role} onChange={(e) => setRole(e.target.value as Exclude<RoleMembre, 'proprietaire'>)}>
-            {ROLES_INVITABLES.map((r) => <option key={r} value={r}>{ROLES[r].libelle}</option>)}
-          </select>
-        </Champ>
-        <button className="bouton" disabled={!telephone.trim()}>Ajouter</button>
-      </form>
     </>
   );
 }

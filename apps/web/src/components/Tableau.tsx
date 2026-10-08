@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
+import { peut } from '../droits';
 import { stockAlimentKg, consommationMoyenneKg, jourLocal, tableauDeBord, type LigneLocal, type Niveau, type TableauDeBord } from '@digitalab/core';
 import { TYPES_LOGEMENT } from '../i18n/fr';
 import { dateCourte, formatMontant, signe, virgule } from '../format';
@@ -129,6 +130,7 @@ export function Tableau({ elevage }: { elevage: Elevage }) {
           <div className="actions"><a className="lien" href="#/quarantaine">Zone de quarantaine</a></div>
         </Carte>
 
+        {peut(elevage, 'finances.voir_recettes') && peut(elevage, 'finances.voir_depenses') && (
         <Carte titre="Situation financière" lien="finances" libelleLien="Finances">
           <div className="tb-duo">
             <div><span className="muet">Total des entrées</span><b className="gain">{formatMontant(t.finances.recettesTotal)}</b></div>
@@ -151,6 +153,7 @@ export function Tableau({ elevage }: { elevage: Elevage }) {
             <p><a className="lien" href="#/finances/salaires">{t.finances.salairesAPayer} salaire{t.finances.salairesAPayer > 1 ? 's' : ''} à payer ce mois-ci</a></p>
           )}
         </Carte>
+        )}
 
         <Carte titre="Aliment" lien="saisie/stock" libelleLien="Mettre à jour">
           {stock === null ? <p className="muet">Le stock n’est pas suivi. Enregistrez votre stock de départ pour être prévenu avant la rupture.</p> : (

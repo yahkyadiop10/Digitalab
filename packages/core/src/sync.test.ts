@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROLES, TABLES_SYNCHRONISEES, normaliserTelephone } from './sync';
+import { TABLES_SYNCHRONISEES, normaliserTelephone } from './sync';
 
 describe('numéros de téléphone', () => {
   it('complète un numéro sénégalais à 9 chiffres', () => {
@@ -16,10 +16,7 @@ describe('numéros de téléphone', () => {
   });
 });
 
-describe('rôles et tables', () => {
-  it('seuls le propriétaire et le soigneur écrivent', () => {
-    expect(Object.entries(ROLES).filter(([, r]) => r.ecriture).map(([k]) => k)).toEqual(['proprietaire', 'soigneur']);
-  });
+describe('tables synchronisées', () => {
   it('ne synchronise pas les réglages', () => {
     expect(TABLES_SYNCHRONISEES).not.toContain('reglages' as never);
     expect(new Set(TABLES_SYNCHRONISEES).size).toBe(TABLES_SYNCHRONISEES.length);

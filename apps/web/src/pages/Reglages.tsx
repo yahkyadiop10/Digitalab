@@ -2,6 +2,8 @@ import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { SEUILS_PAR_DEFAUT, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
 import { Champ, useNotifier, versNombre } from '../components/ui';
 import { chargerDemo } from '../demo';
+import { peut, profilDe } from '../droits';
+import { redimensionnerLogo } from '../logo';
 import { depuisQuand, useConnexion } from './Compte';
 import { TYPES_LOGEMENT } from '../i18n/fr';
 import { ErreurSaisie, repo } from '../repo';
@@ -13,15 +15,36 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
     <>
       <h2>Compte et équipe</h2>
       <CarteCompte />
-      <h2>Mon élevage</h2>
-      <NomElevage nom={elevage.reglages.nomElevage} />
-      <Identite identite={elevage.reglages.identite} />
-      <h2>Mes locaux</h2>
-      <Locaux logements={elevage.donnees.logements} />
-      <h2>Places et seuils d’alerte</h2>
-      <Seuillage elevage={elevage} />
-      <h2>Mes données</h2>
-      <Donnees />
+      {peut(elevage, 'admin.utilisateurs') && elevage.moi.relie && (
+        <a className="carte ligne" href="#/utilisateurs" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <span>Gestion des utilisateurs<br /><small className="muet">Ajouter des personnes, choisir ce que chacune voit et fait</small></span>
+          <b aria-hidden="true">›</b>
+        </a>
+      )}
+      {peut(elevage, 'admin.elevage') && (
+        <>
+          <h2>Mon élevage</h2>
+          <MonElevage elevage={elevage} />
+        </>
+      )}
+      {peut(elevage, 'cheptel.locaux') && (
+        <>
+          <h2>Mes locaux</h2>
+          <Locaux logements={elevage.donnees.logements} />
+        </>
+      )}
+      {peut(elevage, 'admin.seuils') && (
+        <>
+          <h2>Places et seuils d’alerte</h2>
+          <Seuillage elevage={elevage} />
+        </>
+      )}
+      {peut(elevage, 'admin.elevage') && (
+        <>
+          <h2>Mes données</h2>
+          <Donnees />
+        </>
+      )}
       <h2>À propos</h2>
       <div className="carte muet">
         Digitalab, version de travail (phase 1). Vos données restent sur cet appareil (et sur le serveur si vous avez relié un compte) ; faites régulièrement une sauvegarde. L’application fonctionne sans connexion une fois chargée.
@@ -44,27 +67,52 @@ function CarteCompte() {
   );
 }
 
-function NomElevage({ nom }: { nom: string }) {
-  const [v, setV] = useState(nom);
+function MonElevage({ elevage }: { elevage: Elevage }) {
+  const p = profilDe(elevage);
+  const [v, setV] = useState({ nom: p.nom === 'Mon élevage' && !elevage.reglages.nomElevage ? '' : p.nom, adresse: p.adresse, telephone: p.telephone, ninea: p.ninea });
+  const [erreur, setErreur] = useState<string | null>(null);
   const notifier = useNotifier();
-  return (
-    <div className="carte">
-      <Champ libelle="Nom de l’élevage"><input value={v} onChange={(e) => setV(e.target.value)} /></Champ>
-      <button className="bouton court" onClick={async () => { await repo.ecrireReglage('nomElevage', v.trim()); notifier('Enregistré ✓'); }}>Enregistrer</button>
-    </div>
-  );
-}
 
-function Identite({ identite }: { identite: Reglages['identite'] }) {
-  const [v, setV] = useState(identite);
-  const notifier = useNotifier();
+  const enregistrer = async () => {
+    try {
+      await repo.enregistrerProfil({ nom: v.nom, adresse: v.adresse, telephone: v.telephone, ninea: v.ninea });
+      await repo.ecrireReglage('nomElevage', v.nom.trim());
+      notifier('Enregistré ✓');
+    } catch (e) {
+      setErreur(e instanceof ErreurSaisie ? e.message : 'Enregistrement impossible.');
+    }
+  };
+
+  const choisirLogo = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      await repo.enregistrerProfil({ logo: await redimensionnerLogo(f) });
+      setErreur(null);
+      notifier('Logo enregistré ✓');
+    } catch (err) {
+      setErreur(err instanceof Error ? err.message : 'Logo impossible.');
+    }
+  };
+
   return (
     <div className="carte">
-      <p className="muet">Ces informations s’impriment en haut de vos factures. Toutes sont facultatives.</p>
-      <Champ libelle="Adresse"><input value={v.adresse} onChange={(e) => setV({ ...v, adresse: e.target.value })} /></Champ>
-      <Champ libelle="Téléphone"><input type="tel" value={v.telephone} onChange={(e) => setV({ ...v, telephone: e.target.value })} /></Champ>
-      <Champ libelle="NINEA ou registre de commerce"><input value={v.ninea} onChange={(e) => setV({ ...v, ninea: e.target.value })} /></Champ>
-      <button className="bouton court" onClick={async () => { await repo.ecrireReglage('identite', { adresse: v.adresse.trim(), telephone: v.telephone.trim(), ninea: v.ninea.trim() }); notifier('Enregistré ✓'); }}>Enregistrer</button>
+      <div className="logo-bloc">
+        {p.logo ? <img className="logo-elevage" src={p.logo} alt={`Logo de ${p.nom}`} /> : <p className="muet">Pas encore de logo.</p>}
+        <label className="bouton alt court">
+          {p.logo ? 'Changer le logo' : 'Ajouter le logo'}
+          <input type="file" accept="image/*" hidden onChange={(e) => void choisirLogo(e)} />
+        </label>
+        {p.logo && <button className="lien danger" onClick={async () => { await repo.enregistrerProfil({ logo: null }); notifier('Logo retiré'); }}>Retirer</button>}
+        <p className="muet">Il s’affiche dans l’application et s’imprime en haut de vos factures, reçus et récapitulatifs.</p>
+      </div>
+      <Champ libelle="Nom de l’élevage"><input value={v.nom} onChange={(e) => setV({ ...v, nom: e.target.value })} /></Champ>
+      <Champ libelle="Adresse (facultatif)"><input value={v.adresse} onChange={(e) => setV({ ...v, adresse: e.target.value })} /></Champ>
+      <Champ libelle="Téléphone (facultatif)"><input type="tel" value={v.telephone} onChange={(e) => setV({ ...v, telephone: e.target.value })} /></Champ>
+      <Champ libelle="NINEA ou registre de commerce (facultatif)"><input value={v.ninea} onChange={(e) => setV({ ...v, ninea: e.target.value })} /></Champ>
+      {erreur && <p className="erreur" role="alert">{erreur}</p>}
+      <button className="bouton court" onClick={() => void enregistrer()}>Enregistrer</button>
     </div>
   );
 }

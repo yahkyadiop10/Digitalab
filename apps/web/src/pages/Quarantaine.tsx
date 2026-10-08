@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Si } from '../components/Si';
 import {
   COMPORTEMENTS,
   DUREE_QUARANTAINE_DEFAUT,
@@ -35,7 +36,7 @@ export function PageQuarantaine({ elevage }: { elevage: Elevage }) {
     <>
       <h2>Zone de quarantaine</h2>
       <p className="muet">Gardez les nouveaux arrivants à l’écart du reste de l’élevage, le temps de les observer avant de les mélanger.</p>
-      <a className="bouton" href="#/quarantaine/arrivee">+ Nouvelle arrivée</a>
+      <Si elevage={elevage} droit="quarantaine.arrivee"><a className="bouton" href="#/quarantaine/arrivee">+ Nouvelle arrivée</a></Si>
 
       <h2>En quarantaine</h2>
       {actives.length === 0 && <div className="carte muet">Aucun animal en quarantaine.</div>}

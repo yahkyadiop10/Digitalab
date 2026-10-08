@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import { Si } from '../components/Si';
 import {
   CATEGORIES_SYMPTOMES,
   SYMPTOMES,
@@ -56,11 +57,11 @@ export function PageSante({ elevage }: { elevage: Elevage }) {
 
   return (
     <>
-      <a className="bouton" href="#/sante/probleme">⚠️ Noter un problème de santé</a>
+      <Si elevage={elevage} droit="sante.probleme"><a className="bouton" href="#/sante/probleme">⚠️ Noter un problème de santé</a></Si>
       <div className="rangee">
-        <a className="bouton alt court" href="#/sante/vaccin">💉 Vaccin fait</a>
-        <a className="bouton alt court" href="#/sante/traitement">💊 Traitement</a>
-        <a className="bouton alt court" href="#/quarantaine">🚧 Quarantaine</a>
+        <Si elevage={elevage} droit="sante.vaccin"><a className="bouton alt court" href="#/sante/vaccin">💉 Vaccin fait</a></Si>
+        <Si elevage={elevage} droit="sante.traitement"><a className="bouton alt court" href="#/sante/traitement">💊 Traitement</a></Si>
+        <Si elevage={elevage} droit="quarantaine.voir"><a className="bouton alt court" href="#/quarantaine">🚧 Quarantaine</a></Si>
       </div>
 
       <h2>Vaccins à faire</h2>
