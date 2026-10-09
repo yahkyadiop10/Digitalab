@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { stockAlimentKg } from '@digitalab/core';
+import { LIBELLES_MODES, MODES_PAIEMENT, stockAlimentKg, type ModePaiement } from '@digitalab/core';
 import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
 import { CAUSES_DECES } from '../i18n/fr';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
@@ -144,10 +144,11 @@ function FormStock({ elevage }: { elevage: Elevage }) {
   const [mode, setMode] = useState<'achat' | 'comptage'>('achat');
   const [kg, setKg] = useState('');
   const [prix, setPrix] = useState('');
+  const [moyen, setMoyen] = useState<ModePaiement>('especes');
   const { occupe, erreur, envoyer } = useEnvoi();
   const soumettre = (e: FormEvent) => {
     e.preventDefault();
-    if (mode === 'achat') return envoyer(() => repo.ajouterAchatAliment({ quantiteKg: versNombre(kg), prixTotal: prix ? versNombre(prix) : null }), 'Achat enregistré ✓');
+    if (mode === 'achat') return envoyer(() => repo.ajouterAchatAliment({ quantiteKg: versNombre(kg), prixTotal: prix ? versNombre(prix) : null, mode: moyen }), 'Achat enregistré ✓');
     return envoyer(() => repo.corrigerStock(stock, versNombre(kg)), 'Stock mis à jour ✓');
   };
   return (
@@ -165,6 +166,11 @@ function FormStock({ elevage }: { elevage: Elevage }) {
       {mode === 'achat' && (
         <Champ libelle="Prix total payé en FCFA (facultatif)">
           <Nombre valeur={prix} onChange={setPrix} pas={500} unite="FCFA" />
+        </Champ>
+      )}
+      {mode === 'achat' && prix && (
+        <Champ libelle="Payé avec" aide="L’argent sort du compte correspondant (caisse, Wave…).">
+          <select value={moyen} onChange={(e) => setMoyen(e.target.value as ModePaiement)}>{MODES_PAIEMENT.map((m) => <option key={m} value={m}>{LIBELLES_MODES[m]}</option>)}</select>
         </Champ>
       )}
       {erreur && <p className="erreur" role="alert">{erreur}</p>}

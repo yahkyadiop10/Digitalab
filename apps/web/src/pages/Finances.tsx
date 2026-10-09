@@ -26,6 +26,7 @@ import {
   type SensOperation,
 } from '@digitalab/core';
 import { Si } from '../components/Si';
+import { ResumeTresorerie } from './Tresorerie';
 import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { dateCourte, formatMontant, signe } from '../format';
@@ -44,7 +45,7 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
   const droits = elevage.moi.droits;
   const voitDep = aDroit(droits, 'finances.voir_depenses');
   const voitRec = aDroit(droits, 'finances.voir_recettes');
-  const lignes = lignesFinance(operations, donnees.entreesStock, paiements).filter((l) => (l.sens === 'depense' ? voitDep : voitRec));
+  const lignes = lignesFinance(operations, donnees.entreesStock, paiements, elevage.transferts).filter((l) => (l.sens === 'depense' ? voitDep : voitRec));
   const flux = fluxParMode(operations, paiements, mois).filter((x) => (x.encaisse > 0 && voitRec) || (x.paye > 0 && voitDep)).map((x) => ({ ...x, encaisse: voitRec ? x.encaisse : 0, paye: voitDep ? x.paye : 0 }));
   const validation = enAttenteDeValidation(operations, paiements);
   const aValiderOps = validation.operations.filter((o) => (o.employeId ? aDroit(droits, 'salaires.payer') : peutValiderDepense(droits, o.categorie)));
@@ -82,6 +83,8 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
         <Si elevage={elevage} droit="salaires.voir"><a className="bouton alt court" href="#/finances/salaires">👷 Salaires</a></Si>
         <Si elevage={elevage} un={['finances.carnet', 'finances.saisir_facture', 'finances.encaisser']}><a className="bouton alt court" href="#/finances/carnet">📒 Clients et fournisseurs</a></Si>
       </div>
+
+      <Si elevage={elevage} droit="tresorerie.voir"><ResumeTresorerie elevage={elevage} /></Si>
 
       {(aValiderOps.length > 0 || aValiderPaiements.length > 0) && (
         <>

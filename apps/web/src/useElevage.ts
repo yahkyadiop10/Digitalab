@@ -7,7 +7,10 @@ import {
   type Alerte,
   type DonneesElevage,
   type Niveau,
+  type CompteTresorerie,
   type Employe,
+  type Pointage,
+  type Transfert,
   type OperationFinanciere,
   type Paiement,
   type ProfilElevage,
@@ -37,6 +40,10 @@ export interface Elevage {
   employes: Employe[];
   /** Nom, coordonnées et logo de l'élevage (imprimés sur les documents). */
   profil: ProfilElevage | undefined;
+  /** Trésorerie : comptes (caisse, Wave…), transferts entre comptes et comptages. */
+  comptes: CompteTresorerie[];
+  transferts: Transfert[];
+  pointages: Pointage[];
   /** Fonction, droits et bâtiments réservés de la personne connectée ; sans compte relié, tous les droits. */
   moi: { fonction?: string; droits: string[]; zones: string[]; role: string; relie: boolean };
   reglages: Reglages;
@@ -93,13 +100,16 @@ export function useElevage(): Elevage | null {
   const employes = useLiveQuery(() => db.employes.toArray(), []);
   const profils = useLiveQuery(() => db.profil.toArray(), []);
   const connexion = useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
+  const comptes = useLiveQuery(() => db.comptes.toArray(), []);
+  const transferts = useLiveQuery(() => db.transferts.toArray(), []);
+  const pointages = useLiveQuery(() => db.pointages.toArray(), []);
   const quarantaines = useLiveQuery(() => db.quarantaines.toArray(), []);
   const notesQuarantaine = useLiveQuery(() => db.notesQuarantaine.toArray(), []);
   const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
   const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
 
   return useMemo(() => {
-    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !profils || connexion === undefined || !operations || !paiements || !tiers || !employes || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !comptes || !transferts || !pointages || !profils || connexion === undefined || !operations || !paiements || !tiers || !employes || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
     const zones = connexion?.zones ?? [];
     const completes: DonneesElevage = {
       lots: vivants(lots),
@@ -126,6 +136,7 @@ export function useElevage(): Elevage | null {
       quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
     };
     return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), profil: vivants(profils).find((p) => p.id === 'elevage'),
+      comptes: vivants(comptes), transferts: vivants(transferts), pointages: vivants(pointages),
       moi: connexion ? { droits: connexion.droits, zones: connexion.zones, role: connexion.role, relie: true, ...(connexion.fonction ? { fonction: connexion.fonction } : {}) } : { droits: TOUTES_LES_FONCTIONS, zones: [], role: 'proprietaire', relie: false }, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
-  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, profils, connexion, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, profils, comptes, transferts, pointages, connexion, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
 }

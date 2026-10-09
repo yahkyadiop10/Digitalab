@@ -14,6 +14,7 @@ export const LIBELLES_CATEGORIES: Record<string, string> = {
   materiel: 'Matériel',
   main_oeuvre: 'Main-d’œuvre et salaires',
   transport: 'Transport',
+  frais_comptes: 'Frais de retrait et de transfert',
   impots: 'Impôts, taxes et frais',
   oeufs: 'Œufs',
   oeufs_a_couver: 'Œufs à couver',
@@ -163,7 +164,7 @@ export function reglement(op: OperationFinanciere, paiements: Paiement[]): Regle
 }
 
 /** Réunit les opérations saisies et les achats d'aliment avec un prix (dépense « aliment » déjà payée). */
-export function lignesFinance(operations: OperationFinanciere[], entreesStock: EntreeStock[], paiements: Paiement[] = []): LigneFinance[] {
+export function lignesFinance(operations: OperationFinanciere[], entreesStock: EntreeStock[], paiements: Paiement[] = [], fraisDeTransferts: { id: string; date: Jour; frais?: number; supprimeLe?: number | null }[] = []): LigneFinance[] {
   const parOperation = new Map<string, Paiement[]>();
   for (const p of comptes(paiements)) parOperation.set(p.operationId, [...(parOperation.get(p.operationId) ?? []), p]);
   const saisies = comptes(operations).map((o): LigneFinance => {
@@ -180,7 +181,10 @@ export function lignesFinance(operations: OperationFinanciere[], entreesStock: E
   const achats = vivants(entreesStock)
     .filter((e) => e.quantiteKg > 0 && (e.prixTotal ?? 0) > 0)
     .map((e): LigneFinance => ({ cle: `stock:${e.id}`, date: e.date, sens: 'depense', categorie: 'aliment', montant: e.prixTotal ?? 0, paye: true, reste: 0, automatique: true }));
-  return [...saisies, ...achats].sort((a, b) => b.date.localeCompare(a.date) || b.cle.localeCompare(a.cle));
+  const frais = vivants(fraisDeTransferts)
+    .filter((t) => (t.frais ?? 0) > 0)
+    .map((t): LigneFinance => ({ cle: `transfert:${t.id}`, date: t.date, sens: 'depense', categorie: 'frais_comptes', montant: t.frais ?? 0, paye: true, reste: 0, automatique: true }));
+  return [...saisies, ...achats, ...frais].sort((a, b) => b.date.localeCompare(a.date) || b.cle.localeCompare(a.cle));
 }
 
 export interface ResumeFinance {

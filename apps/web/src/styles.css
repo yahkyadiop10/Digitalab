@@ -272,3 +272,18 @@ fieldset.carte legend { font-weight: 700; padding: 0 6px; }
 .jour-journal { text-transform: none; margin: 18px 0 8px; font-size: 16px; color: var(--muet); }
 .ligne-journal { align-items: flex-start; }
 .ligne-journal .heure { flex: none; font-variant-numeric: tabular-nums; padding-top: 2px; }
+
+/* ---------- Trésorerie ---------- */
+.solde-grand { font-size: 24px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.total-liquidite { display: flex; flex-direction: column; gap: 2px; background: linear-gradient(135deg, var(--teinte-vert), var(--carte)); }
+.total-liquidite .solde-grand { font-size: 34px; color: var(--marque); }
+.negatif { color: var(--rouge); }
+.compte small { display: block; margin-top: 4px; }
+
+.compte-tete { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.compte .solde-grand { display: block; font-size: 26px; }
+.tresorerie-resume .ligne { align-items: baseline; }
+/* Une ligne « libellé … montant » passe à la ligne plutôt que de déborder. */
+.ligne { flex-wrap: wrap; row-gap: 2px; }
+.ligne > span { flex: 1 1 9rem; }
+.ligne > b, .ligne > .lien { margin-left: auto; }

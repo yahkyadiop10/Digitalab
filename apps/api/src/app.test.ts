@@ -356,6 +356,32 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect(await ids(await seConnecter(banc, '77 400 00 09'))).toEqual(['e1', 'o-sal', 'p-sal']);
     });
 
+    it('les comptes de trésorerie : qui voit les soldes voit aussi les règlements, mais pas les fiches d’employés', async () => {
+      const patron = await seConnecter(banc, '77 400 01 01');
+      await sync(patron, 0, [
+        enreg('operations', 'to-dep', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 100 }),
+        enreg('operations', 'to-sal', MAINTENANT, { sens: 'depense', categorie: 'main_oeuvre', montant: 300, employeId: 'e1' }),
+        enreg('paiements', 'tp-dep', MAINTENANT, { operationId: 'to-dep', montant: 100, mode: 'wave' }),
+        enreg('paiements', 'tp-sal', MAINTENANT, { operationId: 'to-sal', montant: 300, mode: 'especes' }),
+        enreg('employes', 'e1', MAINTENANT, { nom: 'Moussa', salaire: 1 }),
+        enreg('comptes', 'c1', MAINTENANT, { nom: 'Caisse', soldeInitial: 0 }),
+        enreg('transferts', 'tr1', MAINTENANT, { deId: 'c1', versId: 'c2', montant: 5 }),
+        enreg('pointages', 'pt1', MAINTENANT, { compteId: 'c1', ecart: -50 }),
+      ]);
+      await inviter(patron, { telephone: '77 400 01 02', role: 'personnalise', droits: ['tresorerie.voir'] });
+      const tres = await seConnecter(banc, '77 400 01 02');
+      const vus = ((await sync(tres, 0, [], patron.organisationId)).json() as ReponseSync).changements.map((c) => c.enregistrement.id).sort();
+      expect(vus).toEqual(['c1', 'pt1', 'to-dep', 'to-sal', 'tp-dep', 'tp-sal', 'tr1']);
+      // Sans ce droit, rien de tout cela n'est visible ; et voir ne permet pas d'écrire.
+      await inviter(patron, { telephone: '77 400 01 03', role: 'soigneur' });
+      expect(((await sync(await seConnecter(banc, '77 400 01 03'), 0, [], patron.organisationId)).json() as ReponseSync).changements).toEqual([]);
+      expect((await sync(tres, 0, [enreg('transferts', 'tr2', MAINTENANT + 1, { deId: 'c1', versId: 'c2', montant: 9 })], patron.organisationId)).statusCode).toBe(403);
+      await inviter(patron, { telephone: '77 400 01 04', role: 'personnalise', droits: ['tresorerie.voir', 'tresorerie.transferer', 'tresorerie.pointer'] });
+      const caissier = await seConnecter(banc, '77 400 01 04');
+      const ok = (await sync(caissier, 0, [enreg('transferts', 'tr3', MAINTENANT + 1, { deId: 'c1', versId: 'c2', montant: 9 }), enreg('pointages', 'pt2', MAINTENANT + 1, { compteId: 'c1', ecart: 0 }), enreg('comptes', 'c9', MAINTENANT + 1, { nom: 'Pirate' })], patron.organisationId)).json() as ReponseSync;
+      expect(ok.refuses).toBe(1);
+    });
+
     it('n’accepte que les écritures permises par les droits cochés', async () => {
       const patron = await seConnecter(banc, '77 400 00 10');
       await inviter(patron, { telephone: '77 400 00 11', role: 'personnalise', droits: ['saisie.ponte', 'cheptel.voir'] });

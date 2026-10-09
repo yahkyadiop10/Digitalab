@@ -218,6 +218,39 @@ try {
   await page.getByRole('link', { name: /Retour/ }).click();
   await page.getByRole('link', { name: /Retour|Finances/ }).first().click();
 
+  // 9c. Trésorerie : comptes créés, soldes suivis selon le moyen de paiement, transfert avec frais, comptage avec écart
+  etape('9c');
+  await page.getByRole('banner').getByRole('link', { name: 'Finances' }).click();
+  await page.getByRole('link', { name: 'Mettre en place mes comptes' }).click();
+  await page.getByRole('button', { name: /Créer la caisse, Wave/ }).click();
+  await page.getByRole('heading', { name: 'Liquidités, tous comptes ensemble' }).or(page.getByText('Liquidités, tous comptes ensemble')).waitFor();
+  const comptes = await page.locator('a.compte').allInnerTexts();
+  assert.equal(comptes.length, 4);
+  assert.match(comptes.find((c) => c.includes('Wave')), /10\s000\sFCFA/);
+  assert.match(comptes.find((c) => c.includes('Caisse')), /18\s000\sFCFA/);
+  await page.getByRole('link', { name: /Transférer/ }).click();
+  const valeurDe = async (etiquette, nom) => page.getByLabel(etiquette).locator('option', { hasText: nom }).first().getAttribute('value');
+  await page.getByLabel('Depuis le compte').selectOption(await valeurDe('Depuis le compte', 'Wave'));
+  await page.getByLabel('Vers le compte').selectOption(await valeurDe('Vers le compte', 'Caisse'));
+  await page.locator('.nombre input').nth(0).fill('4000');
+  await page.locator('.nombre input').nth(1).fill('100');
+  await page.getByText(/Wave après/).waitFor();
+  await page.getByRole('button', { name: 'Transférer' }).click();
+  await page.getByText('Liquidités, tous comptes ensemble').waitFor();
+  const apres = await page.locator('a.compte').allInnerTexts();
+  assert.match(apres.find((c) => c.includes('Wave')), /5\s900\sFCFA/);
+  assert.match(apres.find((c) => c.includes('Caisse')), /22\s000\sFCFA/);
+  await page.getByRole('link', { name: /Compter un compte/ }).click();
+  await page.getByLabel('Solde réellement constaté (FCFA)').fill("21000");
+  await page.getByText(/Écart : −\s1\s000\sFCFA/).waitFor();
+  await page.getByRole('button', { name: 'Enregistrer le comptage' }).click();
+  await page.getByText('À expliquer : le solde ci-dessus ne tient pas compte de cet écart.').waitFor();
+  await page.getByRole('link', { name: /Trésorerie/ }).first().click();
+  await page.getByText(/1 écart à expliquer/).first().waitFor();
+  await page.getByRole('banner').getByRole('link', { name: 'Finances' }).click();
+  await page.getByText('Résultat du mois').waitFor();
+  assert.match(await texte(), /Frais de retrait et de transfert|100\sFCFA/);
+
   // 10. Zone de quarantaine : arrivée, fiche, note du jour, décision de fin, tableau de bord
   etape(10);
   await page.getByRole('navigation').getByRole('link', { name: /Saisie/ }).click();

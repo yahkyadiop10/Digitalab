@@ -61,6 +61,8 @@ export interface EntreeStock extends Enregistrement {
   date: Jour;
   quantiteKg: number;
   prixTotal?: number | null;
+  /** Moyen de paiement de l'achat (espèces, Wave…) : il fait sortir l'argent du compte correspondant. */
+  mode?: string;
 }
 
 /** Repères d'incubation d'une espèce. Valeurs de départ : la notice de la couveuse et un technicien font foi. */

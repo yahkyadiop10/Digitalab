@@ -17,6 +17,7 @@ import { PageFichePublique, PartageFiche } from './pages/FicheSuivi';
 import { FormProbleme, FormQuarantaine, FormTraitement, FormVaccin, PageCalendrier, PageHistorique, PageRemedes, PageSante } from './pages/Sante';
 import { PageCompte, useConnexion } from './pages/Compte';
 import { PageJournal } from './pages/Journal';
+import { FormCompte, FormPointage, FormTransfert, PageCompte as PageCompteTresorerie, PageTresorerie } from './pages/Tresorerie';
 import { FormUtilisateur, PageUtilisateurs } from './pages/Utilisateurs';
 import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
@@ -66,6 +67,14 @@ function Page({ elevage }: { elevage: Elevage }) {
       return a ? <FicheQuarantaine elevage={elevage} id={a} /> : <PageQuarantaine elevage={elevage} />;
     case 'finances':
       if (a === 'depense' || a === 'recette') return <FormOperation elevage={elevage} sens={a} lotInitial={params.get('lot')} />;
+      if (a === 'tresorerie') {
+        if (segments[2] === 'nouveau') return <FormCompte elevage={elevage} />;
+        if (segments[2] === 'modifier' && segments[3]) return <FormCompte elevage={elevage} id={segments[3]} />;
+        if (segments[2] === 'transfert') return <FormTransfert elevage={elevage} deInitial={params.get('de')} />;
+        if (segments[2] === 'pointage') return <FormPointage elevage={elevage} compteInitial={params.get('compte')} />;
+        if (segments[2] === 'compte' && segments[3]) return <PageCompteTresorerie elevage={elevage} id={segments[3]} />;
+        return <PageTresorerie elevage={elevage} />;
+      }
       if (a === 'recu' && segments[2]) return <PageRecu elevage={elevage} id={segments[2]} />;
       if (a === 'op' && segments[2]) return segments[3] === 'facture' ? <PageFacture elevage={elevage} id={segments[2]} /> : <PageOperation elevage={elevage} id={segments[2]} />;
       if (a === 'carnet') return segments[2] === 'nouveau' ? <FicheTiers elevage={elevage} /> : segments[2] ? <FicheTiers elevage={elevage} id={segments[2]} /> : <PageCarnet elevage={elevage} />;
@@ -137,7 +146,7 @@ function Application() {
           <h1>{profil.nom}</h1>
           {elevage.moi.fonction && <small>{elevage.moi.fonction}</small>}
         </div>
-        <OutilsEntete nbAlertes={nbAlertes} finances={aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires')} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
+        <OutilsEntete nbAlertes={nbAlertes} finances={aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires') || aLeModule(elevage, 'tresorerie')} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
       </header>
       <main>
         <Page elevage={elevage} />

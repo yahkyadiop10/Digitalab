@@ -36,6 +36,9 @@ const NOMS_TABLES: Record<TableSynchronisee, string> = {
   tiers: 'une fiche du carnet',
   employes: 'une fiche d’employé',
   profil: 'les informations de l’élevage',
+  comptes: 'un compte de trésorerie',
+  transferts: 'un transfert entre comptes',
+  pointages: 'un comptage de caisse ou de compte',
 };
 
 export const LIBELLES_TABLES_JOURNAL: Record<string, string> = {
@@ -90,6 +93,15 @@ export function decrireEnregistrement(table: string, e: Record<string, unknown>)
       break;
     case 'paiements':
       morceaux.push(fcfa(e['montant']), texte(e['mode']));
+      break;
+    case 'comptes':
+      morceaux.push(texte(e['nom']));
+      break;
+    case 'transferts':
+      morceaux.push(fcfa(e['montant']), Number(e['frais']) > 0 && `frais ${fcfa(e['frais'])}`);
+      break;
+    case 'pointages':
+      morceaux.push(`réel ${fcfa(e['soldeReel'])}`, Number(e['ecart']) !== 0 ? `écart ${Number(e['ecart']) > 0 ? '+' : '−'}${fcfa(Math.abs(Number(e['ecart'])))}` : 'aucun écart');
       break;
     case 'notesQuarantaine':
       morceaux.push(texte(e['etat']));

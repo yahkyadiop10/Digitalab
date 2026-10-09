@@ -69,9 +69,10 @@ export function droitsRequis(segments: string[]): string[] | null {
     case 'finances':
       if (a === 'depense') return ['finances.saisir_depense'];
       if (a === 'recette') return ['finances.saisir_facture'];
+      if (a === 'tresorerie') return b === 'transfert' ? ['tresorerie.transferer'] : b === 'pointage' ? ['tresorerie.pointer'] : b === 'nouveau' || b === 'modifier' ? ['tresorerie.gerer'] : ['tresorerie.voir'];
       if (a === 'carnet') return ['finances.carnet', 'finances.saisir_facture', 'finances.encaisser'];
       if (a === 'salaires') return b === 'employe' ? ['salaires.gerer'] : b === 'payer' ? ['salaires.payer'] : ['salaires.voir'];
-      return [...fonctionsDuModule('finances')];
+      return [...fonctionsDuModule('finances'), ...fonctionsDuModule('salaires'), ...fonctionsDuModule('tresorerie')];
     default:
       return null;
   }

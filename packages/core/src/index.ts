@@ -11,5 +11,6 @@ export * from './quarantaine';
 export * from './sante';
 export * from './sync';
 export * from './tableau';
+export * from './tresorerie';
 export * from './types';
 export * from './zones';

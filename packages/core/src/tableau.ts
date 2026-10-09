@@ -61,6 +61,7 @@ interface Entree {
   operations: OperationFinanciere[];
   paiements?: Paiement[];
   employes?: Employe[];
+  transferts?: { id: string; date: string; frais?: number; supprimeLe?: number | null }[];
   especes: Record<string, EspeceConfig>;
   protocoles: ProtocoleVaccin[];
   maintenant: Date;
@@ -69,7 +70,7 @@ interface Entree {
 const vivants = <T extends { supprimeLe?: number | null }>(xs: T[]) => xs.filter((x) => !x.supprimeLe);
 
 /** Rassemble en un seul calcul tout ce que montre le tableau de bord de l'accueil. */
-export function tableauDeBord({ donnees, operations, paiements = [], employes = [], especes, protocoles, maintenant }: Entree): TableauDeBord {
+export function tableauDeBord({ donnees, operations, paiements = [], employes = [], transferts = [], especes, protocoles, maintenant }: Entree): TableauDeBord {
   const auj = jourLocal(maintenant);
   const eff = effectifs(donnees.mouvements);
   const lots = vivants(donnees.lots).filter((l) => !l.archive && (eff.get(l.id) ?? 0) > 0);
@@ -136,7 +137,7 @@ export function tableauDeBord({ donnees, operations, paiements = [], employes = 
   }
 
   // Finances
-  const lignes = lignesFinance(operations, donnees.entreesStock, paiements);
+  const lignes = lignesFinance(operations, donnees.entreesStock, paiements, transferts);
   const tout = resume(lignes);
   const mois = resume(lignes, auj.slice(0, 7));
   const attente = enAttente(lignes);

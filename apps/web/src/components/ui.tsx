@@ -157,7 +157,7 @@ export function Navigation({ elevage }: { elevage: Pick<Elevage, 'moi'> }) {
   const visibles = ONGLETS.filter((o) => {
     if (o.cle === 'accueil') return true;
     if (o.cle === 'saisie') return aDesTuilesDeSaisie(elevage);
-    if (o.cle === 'finances') return aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires');
+    if (o.cle === 'finances') return aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires') || aLeModule(elevage, 'tresorerie');
     return aLeModule(elevage, o.cle);
   });
   return (

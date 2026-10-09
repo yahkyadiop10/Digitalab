@@ -12,7 +12,7 @@ const RUBRIQUES: { cle: string; libelle: string; tables: string[] }[] = [
   { cle: 'cheptel', libelle: 'Cheptel et bâtiments', tables: ['lots', 'logements'] },
   { cle: 'couveuse', libelle: 'Couveuse', tables: ['couveuses', 'incubations', 'mirages'] },
   { cle: 'sante', libelle: 'Santé et quarantaine', tables: ['evenementsSante', 'quarantaines', 'notesQuarantaine'] },
-  { cle: 'finances', libelle: 'Finances et salaires', tables: ['operations', 'paiements', 'tiers', 'employes'] },
+  { cle: 'finances', libelle: 'Finances et salaires', tables: ['operations', 'paiements', 'tiers', 'employes', 'comptes', 'transferts', 'pointages'] },
   { cle: 'utilisateurs', libelle: 'Utilisateurs et droits', tables: ['utilisateurs', 'profil'] },
 ];
 

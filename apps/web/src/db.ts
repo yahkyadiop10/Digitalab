@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Employe, Paiement, ProfilElevage, Tiers, RoleMembre, OperationFinanciere, Couveuse, Distribution, EntreeStock, EvenementSante, Incubation, Logement, Lot, Mirage, Mouvement, NoteQuarantaine, Ponte, Quarantaine } from '@digitalab/core';
+import type { CompteTresorerie, Pointage, Transfert, Employe, Paiement, ProfilElevage, Tiers, RoleMembre, OperationFinanciere, Couveuse, Distribution, EntreeStock, EvenementSante, Incubation, Logement, Lot, Mirage, Mouvement, NoteQuarantaine, Ponte, Quarantaine } from '@digitalab/core';
 
 export interface Reglage {
   cle: string;
@@ -54,6 +54,9 @@ export class BaseElevage extends Dexie {
   tiers!: Table<Tiers, string>;
   employes!: Table<Employe, string>;
   profil!: Table<ProfilElevage, string>;
+  comptes!: Table<CompteTresorerie, string>;
+  transferts!: Table<Transfert, string>;
+  pointages!: Table<Pointage, string>;
   reglages!: Table<Reglage, string>;
   connexion!: Table<Connexion, string>;
   etatsAlertes!: Table<EtatAlerte, string>;
@@ -96,9 +99,14 @@ export class BaseElevage extends Dexie {
     this.version(8).stores({
       profil: 'id',
     });
+    this.version(9).stores({
+      comptes: 'id',
+      transferts: 'id, date',
+      pointages: 'id, compteId, date',
+    });
   }
 }
 
 export const db = new BaseElevage();
 
-export const TABLES_DONNEES = ['logements', 'lots', 'mouvements', 'pontes', 'distributions', 'entreesStock', 'couveuses', 'incubations', 'mirages', 'evenementsSante', 'operations', 'quarantaines', 'notesQuarantaine', 'paiements', 'tiers', 'employes', 'profil', 'reglages', 'etatsAlertes'] as const;
+export const TABLES_DONNEES = ['logements', 'lots', 'mouvements', 'pontes', 'distributions', 'entreesStock', 'couveuses', 'incubations', 'mirages', 'evenementsSante', 'operations', 'quarantaines', 'notesQuarantaine', 'paiements', 'tiers', 'employes', 'profil', 'comptes', 'transferts', 'pointages', 'reglages', 'etatsAlertes'] as const;

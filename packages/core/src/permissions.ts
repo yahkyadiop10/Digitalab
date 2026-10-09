@@ -91,6 +91,15 @@ export const MODULES: ModulePermissions[] = [
     ],
   },
   {
+    code: 'tresorerie', libelle: 'Trésorerie (caisse et comptes)',
+    fonctions: [
+      f('tresorerie.voir', 'Voir les soldes de la caisse et des comptes (donne aussi accès aux règlements qui les composent)'),
+      f('tresorerie.transferer', 'Faire des transferts d’un compte à l’autre'),
+      f('tresorerie.pointer', 'Compter la caisse ou un compte et enregistrer un écart'),
+      f('tresorerie.gerer', 'Créer et modifier les comptes (Wave, Orange Money, banque…)'),
+    ],
+  },
+  {
     code: 'salaires', libelle: 'Salaires',
     fonctions: [
       f('salaires.voir', 'Voir les salaires et les employés'),
@@ -168,7 +177,7 @@ export const DESCRIPTIONS_PROFILS: Record<RoleMembre, string> = {
   proprietaire: 'Tous les droits, dont la gestion des utilisateurs.',
   gerant: 'Tout, sauf la gestion des utilisateurs.',
   soigneur: 'Saisit ponte, aliment et décès, suit les couvées et la santé. Aucun accès aux finances.',
-  caissier: 'Fait les factures, encaisse les ventes et tient le carnet des clients.',
+  caissier: 'Fait les factures, encaisse les ventes et tient le carnet des clients. Ne voit ni les dépenses ni les comptes.',
   veterinaire: 'Consulte le cheptel et écrit dans la santé et la quarantaine.',
   lecteur: 'Consulte seulement.',
   personnalise: 'Droits choisis un par un.',
@@ -214,18 +223,18 @@ export const REGLES_TABLES: Record<TableSynchronisee, Regle> = {
   },
   pontes: { lecture: [...module('saisie'), 'cheptel.voir'], ecriture: ['saisie.ponte'], annulation: ['saisie.annuler'] },
   distributions: { lecture: [...module('saisie'), 'cheptel.voir'], ecriture: ['saisie.aliment'], annulation: ['saisie.annuler'] },
-  entreesStock: { lecture: [...module('saisie'), 'cheptel.voir'], ecriture: ['saisie.stock', 'quarantaine.arrivee'], annulation: ['saisie.annuler', 'saisie.stock'] },
+  entreesStock: { lecture: [...module('saisie'), 'cheptel.voir', 'tresorerie.voir'], ecriture: ['saisie.stock', 'quarantaine.arrivee'], annulation: ['saisie.annuler', 'saisie.stock'] },
   couveuses: { lecture: module('couveuse'), ecriture: ['couveuse.appareils'], annulation: ['couveuse.appareils'] },
   incubations: { lecture: module('couveuse'), ecriture: ['couveuse.mise', 'couveuse.mirage', 'couveuse.eclosion'], annulation: ['couveuse.annuler'] },
   mirages: { lecture: module('couveuse'), ecriture: ['couveuse.mirage'], annulation: ['couveuse.annuler'] },
   evenementsSante: { lecture: module('sante'), ecriture: ['sante.probleme', 'sante.vaccin', 'sante.traitement', 'sante.isolement'], annulation: ['sante.annuler'] },
   operations: {
-    lecture: [...module('finances'), ...module('salaires')],
+    lecture: [...module('finances'), ...module('salaires'), ...module('tresorerie')],
     ecriture: ['finances.saisir_depense', 'finances.saisir_facture', 'finances.encaisser', 'finances.payer', 'finances.valider_depense', 'finances.valider_achat', 'salaires.payer'],
     annulation: ['finances.annuler_depense', 'finances.annuler_vente'],
   },
   paiements: {
-    lecture: [...module('finances'), ...module('salaires')],
+    lecture: [...module('finances'), ...module('salaires'), ...module('tresorerie')],
     ecriture: ['finances.encaisser', 'finances.payer', 'finances.saisir_depense', 'finances.saisir_facture', 'finances.valider_paiement', 'salaires.payer'],
     annulation: ['finances.annuler_depense', 'finances.annuler_vente'],
   },
@@ -233,6 +242,9 @@ export const REGLES_TABLES: Record<TableSynchronisee, Regle> = {
   employes: { lecture: module('salaires'), ecriture: ['salaires.gerer'], annulation: ['salaires.gerer'] },
   quarantaines: { lecture: module('quarantaine'), ecriture: ['quarantaine.arrivee', 'quarantaine.controles', 'quarantaine.decision'], annulation: ['quarantaine.annuler', 'quarantaine.decision'] },
   notesQuarantaine: { lecture: module('quarantaine'), ecriture: ['quarantaine.notes'], annulation: ['quarantaine.annuler'] },
+  comptes: { lecture: module('tresorerie'), ecriture: ['tresorerie.gerer'], annulation: ['tresorerie.gerer'] },
+  transferts: { lecture: module('tresorerie'), ecriture: ['tresorerie.transferer'], annulation: ['tresorerie.transferer'] },
+  pointages: { lecture: module('tresorerie'), ecriture: ['tresorerie.pointer'], annulation: ['tresorerie.pointer'] },
   profil: { lecture: 'base', ecriture: ['admin.elevage'], annulation: ['admin.elevage'] },
 };
 

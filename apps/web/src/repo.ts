@@ -1,4 +1,4 @@
-import { effectifs, jourLocal, MODES_PAIEMENT, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { COMPTES_PAR_DEFAUT, effectifs, jourLocal, MODES_PAIEMENT, soldesComptes, type CompteTresorerie, type TypeCompte, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -15,7 +15,7 @@ let dernierInstant = 0;
 const maintenant = () => (dernierInstant = Math.max(Date.now(), dernierInstant + 1));
 export const aujourdhui = (): Jour => jourLocal(new Date());
 
-export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations' | 'notesQuarantaine' | 'paiements';
+export type TableAnnulable = 'mouvements' | 'pontes' | 'distributions' | 'entreesStock' | 'mirages' | 'evenementsSante' | 'operations' | 'notesQuarantaine' | 'paiements' | 'transferts' | 'pointages';
 
 /** Référence d'un enregistrement créé, pour pouvoir l'annuler juste après. */
 export interface Annulation {
@@ -153,9 +153,13 @@ export function creerRepo(base: BaseElevage = db) {
       return ajouterMouvement(lotId, 'correction', ecart, { note: 'Comptage' });
     },
 
-    async ajouterAchatAliment(d: { quantiteKg: number; prixTotal?: number | null }): Promise<Annulation> {
+    async ajouterAchatAliment(d: { quantiteKg: number; prixTotal?: number | null; mode?: ModePaiement }): Promise<Annulation> {
       const id = nouvelId();
-      await base.entreesStock.add({ id, misAJour: maintenant(), date: aujourdhui(), quantiteKg: decimalPositif(d.quantiteKg, 'Quantité'), prixTotal: d.prixTotal ?? null });
+      if (d.mode && !MODES_PAIEMENT.includes(d.mode)) throw new ErreurSaisie('Moyen de paiement inconnu.');
+      await base.entreesStock.add({
+        id, misAJour: maintenant(), date: aujourdhui(), quantiteKg: decimalPositif(d.quantiteKg, 'Quantité'), prixTotal: d.prixTotal ?? null,
+        ...(d.mode && d.prixTotal ? { mode: d.mode } : {}),
+      });
       return { table: 'entreesStock', id };
     },
 
@@ -418,6 +422,91 @@ export function creerRepo(base: BaseElevage = db) {
       if (!op) throw new ErreurSaisie('Opération introuvable.');
       const { reste } = reglement(op, await base.paiements.where('operationId').equals(id).toArray());
       if (reste > 0) await this.ajouterPaiement(id, reste, mode);
+    },
+
+    /* ---------- Trésorerie : comptes, transferts, comptages ---------- */
+
+    /** Crée la caisse, Wave, Orange Money et la banque (à 0 FCFA) ; le solde de départ de chacun se règle ensuite. */
+    async creerComptesParDefaut(): Promise<void> {
+      const existants = (await base.comptes.toArray()).filter((c) => !c.supprimeLe);
+      for (const c of COMPTES_PAR_DEFAUT) {
+        if (existants.some((e) => e.nom.toLowerCase() === c.nom.toLowerCase())) continue;
+        const pris = new Set(existants.flatMap((e) => e.modes));
+        await base.comptes.add({ id: nouvelId(), misAJour: maintenant(), nom: c.nom, type: c.type, soldeInitial: 0, dateInitiale: aujourdhui(), modes: c.modes.filter((m) => !pris.has(m)) });
+      }
+    },
+
+    async enregistrerCompte(d: { id?: string; nom: string; type: TypeCompte; soldeInitial: number; dateInitiale: Jour; modes: ModePaiement[] }): Promise<string> {
+      const nom = d.nom.trim();
+      if (!nom) throw new ErreurSaisie('Donnez un nom au compte (Caisse, Wave, Banque…).');
+      if (!Number.isInteger(d.soldeInitial)) throw new ErreurSaisie('Solde de départ : entrez un nombre entier de FCFA.');
+      if (d.dateInitiale > aujourdhui()) throw new ErreurSaisie('Le solde de départ ne peut pas être daté dans le futur.');
+      const autres = (await base.comptes.toArray()).filter((c) => !c.supprimeLe && c.id !== d.id);
+      if (autres.some((c) => c.nom.toLowerCase() === nom.toLowerCase())) throw new ErreurSaisie(`Un compte « ${nom} » existe déjà.`);
+      for (const m of d.modes) {
+        const pris = autres.find((c) => c.modes.includes(m));
+        if (pris) throw new ErreurSaisie(`Le moyen de paiement « ${m} » est déjà suivi par le compte « ${pris.nom} ».`);
+      }
+      const fiche: Omit<CompteTresorerie, 'id' | 'misAJour'> = { nom, type: d.type, soldeInitial: d.soldeInitial, dateInitiale: d.dateInitiale, modes: [...new Set(d.modes)] };
+      if (d.id) {
+        if (!(await base.comptes.get(d.id))) throw new ErreurSaisie('Compte introuvable.');
+        await base.comptes.put({ id: d.id, misAJour: maintenant(), ...fiche });
+        return d.id;
+      }
+      const id = nouvelId();
+      await base.comptes.add({ id, misAJour: maintenant(), ...fiche });
+      return id;
+    },
+
+    async supprimerCompte(id: string): Promise<void> {
+      const utilise = (await base.transferts.toArray()).some((t) => !t.supprimeLe && (t.deId === id || t.versId === id));
+      if (utilise) throw new ErreurSaisie('Ce compte a des transferts. Annulez-les d’abord, ou gardez le compte.');
+      await base.comptes.update(id, { supprimeLe: maintenant(), misAJour: maintenant() });
+    },
+
+    /** Déplace de l'argent d'un compte à l'autre. Les frais (retrait, commission) sortent du compte d'origine. */
+    async creerTransfert(d: { deId: string; versId: string; montant: number; frais?: number; date?: Jour; note?: string }): Promise<Annulation> {
+      if (d.deId === d.versId) throw new ErreurSaisie('Choisissez deux comptes différents.');
+      const comptes = (await base.comptes.toArray()).filter((c) => !c.supprimeLe);
+      if (!comptes.some((c) => c.id === d.deId) || !comptes.some((c) => c.id === d.versId)) throw new ErreurSaisie('Compte introuvable.');
+      if (!Number.isInteger(d.montant) || d.montant <= 0) throw new ErreurSaisie('Montant : entrez un nombre entier de FCFA supérieur à zéro.');
+      const frais = d.frais ?? 0;
+      if (!Number.isInteger(frais) || frais < 0) throw new ErreurSaisie('Frais : entrez un nombre entier de FCFA, zéro ou plus.');
+      const date = d.date ?? aujourdhui();
+      if (date > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
+      const id = nouvelId();
+      await base.transferts.add({ id, misAJour: maintenant(), date, deId: d.deId, versId: d.versId, montant: d.montant, ...(frais > 0 ? { frais } : {}), ...(d.note?.trim() ? { note: d.note.trim() } : {}) });
+      return { table: 'transferts', id };
+    },
+
+    /**
+     * Compte l'argent d'un compte : on note ce qui est vraiment là, l'application le compare à ce qu'elle annonçait.
+     * Avec `regulariser`, le solde est corrigé tout de suite ; sinon l'écart reste signalé « à expliquer ».
+     */
+    async pointer(d: { compteId: string; soldeReel: number; regulariser?: boolean; note?: string; date?: Jour }): Promise<Annulation & { ecart: number }> {
+      const compte = await base.comptes.get(d.compteId);
+      if (!compte || compte.supprimeLe) throw new ErreurSaisie('Compte introuvable.');
+      if (!Number.isInteger(d.soldeReel)) throw new ErreurSaisie('Solde compté : entrez un nombre entier de FCFA.');
+      const date = d.date ?? aujourdhui();
+      if (date > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
+      const [comptes, operations, paiements, entreesStock, transferts, pointages] = await Promise.all([base.comptes.toArray(), base.operations.toArray(), base.paiements.toArray(), base.entreesStock.toArray(), base.transferts.toArray(), base.pointages.toArray()]);
+      const solde = soldesComptes({ comptes, operations, paiements, entreesStock, transferts, pointages }).find((s) => s.compte.id === compte.id)?.solde ?? compte.soldeInitial;
+      const ecart = d.soldeReel - solde;
+      if (ecart !== 0 && d.regulariser && !d.note?.trim()) throw new ErreurSaisie('Expliquez en quelques mots d’où vient l’écart avant de corriger le solde.');
+      const id = nouvelId();
+      await base.pointages.add({
+        id, misAJour: maintenant(), compteId: compte.id, date, soldeReel: d.soldeReel, soldeTheorique: solde, ecart, regularise: ecart === 0 ? true : d.regulariser === true,
+        ...(d.note?.trim() ? { note: d.note.trim() } : {}),
+      });
+      return { table: 'pointages', id, ecart };
+    },
+
+    /** Écart expliqué : le solde du compte est corrigé de cet écart. */
+    async regulariserPointage(id: string, note: string): Promise<void> {
+      if (!note.trim()) throw new ErreurSaisie('Expliquez en quelques mots d’où vient l’écart.');
+      const p = await base.pointages.get(id);
+      if (!p) throw new ErreurSaisie('Comptage introuvable.');
+      await base.pointages.update(id, { regularise: true, note: [p.note, note.trim()].filter(Boolean).join(' · '), misAJour: maintenant() });
     },
 
     /* ---------- Clients, fournisseurs, employés et paie ---------- */

@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import { peut } from '../droits';
-import { stockAlimentKg, consommationMoyenneKg, jourLocal, tableauDeBord, type LigneLocal, type Niveau, type TableauDeBord } from '@digitalab/core';
+import { stockAlimentKg, consommationMoyenneKg, jourLocal, tableauDeBord, soldesComptes, liquiditeTotale, ecartsAExpliquer, type LigneLocal, type Niveau, type TableauDeBord } from '@digitalab/core';
 import { TYPES_LOGEMENT } from '../i18n/fr';
 import { dateCourte, formatMontant, signe, virgule } from '../format';
 import type { Elevage } from '../useElevage';
@@ -69,7 +69,7 @@ function LocalLigne({ l, niveau }: { l: LigneLocal; niveau: Niveau | 'vert' }) {
 
 export function Tableau({ elevage }: { elevage: Elevage }) {
   const { donnees, operations, paiements, employes, reglages, maintenant } = elevage;
-  const t = useMemo(() => tableauDeBord({ donnees, operations, paiements, employes, especes: reglages.especes, protocoles: reglages.protocoles, maintenant }), [donnees, operations, paiements, employes, reglages.especes, reglages.protocoles, maintenant]);
+  const t = useMemo(() => tableauDeBord({ donnees, operations, paiements, employes, transferts: elevage.transferts, especes: reglages.especes, protocoles: reglages.protocoles, maintenant }), [donnees, operations, paiements, employes, elevage.transferts, reglages.especes, reglages.protocoles, maintenant]);
   const auj = jourLocal(maintenant);
   const stock = donnees.entreesStock.length > 0 ? stockAlimentKg(donnees) : null;
   const conso = consommationMoyenneKg(donnees, auj);
@@ -153,6 +153,22 @@ export function Tableau({ elevage }: { elevage: Elevage }) {
             <p><a className="lien" href="#/finances/salaires">{t.finances.salairesAPayer} salaire{t.finances.salairesAPayer > 1 ? 's' : ''} à payer ce mois-ci</a></p>
           )}
         </Carte>
+        )}
+
+        {peut(elevage, 'tresorerie.voir') && elevage.comptes.length > 0 && (
+          <Carte titre="Trésorerie" lien="finances/tresorerie" libelleLien="Comptes">
+            {(() => {
+              const soldes = soldesComptes({ comptes: elevage.comptes, operations, paiements, entreesStock: donnees.entreesStock, transferts: elevage.transferts, pointages: elevage.pointages });
+              const ecarts = ecartsAExpliquer(elevage.pointages);
+              return (
+                <>
+                  <div className="tb-grand"><b>{formatMontant(liquiditeTotale(soldes))}</b><span>de liquidités</span></div>
+                  {soldes.map((s) => <Ligne key={s.compte.id} libelle={s.compte.nom} valeur={`${signe(s.solde)} ${formatMontant(s.solde)}`.trim()} />)}
+                  {ecarts.length > 0 && <p className="erreur">{ecarts.length} écart{ecarts.length > 1 ? 's' : ''} à expliquer</p>}
+                </>
+              );
+            })()}
+          </Carte>
         )}
 
         <Carte titre="Aliment" lien="saisie/stock" libelleLien="Mettre à jour">

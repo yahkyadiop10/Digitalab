@@ -107,6 +107,19 @@ describe('synchronisation côté appareil', () => {
     expect(await b.base.paiements.count()).toBe(3);
   });
 
+  it('partage comptes, transferts et comptages : les deux appareils voient les mêmes soldes', async () => {
+    const a = await appareil(serveur);
+    const b = await appareil(serveur);
+    await a.repo.creerComptesParDefaut();
+    const [wave, caisse] = ['Wave', 'Caisse'].map((nom) => nom);
+    const ids = Object.fromEntries((await a.base.comptes.toArray()).map((c) => [c.nom, c.id]));
+    await a.repo.creerTransfert({ deId: ids[wave!]!, versId: ids[caisse!]!, montant: 1000, frais: 10 });
+    await a.repo.pointer({ compteId: ids[caisse!]!, soldeReel: 900 });
+    await a.synchro.synchroniser();
+    await b.synchro.synchroniser();
+    expect([await b.base.comptes.count(), await b.base.transferts.count(), await b.base.pointages.count()]).toEqual([4, 1, 1]);
+  });
+
   it('propage une annulation (suppression logique)', async () => {
     const a = await appareil(serveur);
     const b = await appareil(serveur);

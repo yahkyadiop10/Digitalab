@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { effectifs, stockAlimentKg } from '@digitalab/core';
+import { effectifs, soldesComptes, stockAlimentKg } from '@digitalab/core';
 import { BaseElevage } from './db';
 import { ErreurSaisie, aujourdhui, creerRepo, type Repo } from './repo';
 import { fusionnerReglages } from './reglages';
@@ -399,5 +399,107 @@ describe('quarantaine des nouveaux arrivants', () => {
     await repo.importer(json);
     expect(await base.quarantaines.count()).toBe(1);
     expect(await base.notesQuarantaine.count()).toBe(1);
+  });
+});
+
+describe('trésorerie', () => {
+  const soldeDe = async (nom: string) => {
+    const [comptes, operations, paiements, entreesStock, transferts, pointages] = await Promise.all([base.comptes.toArray(), base.operations.toArray(), base.paiements.toArray(), base.entreesStock.toArray(), base.transferts.toArray(), base.pointages.toArray()]);
+    return soldesComptes({ comptes, operations, paiements, entreesStock, transferts, pointages }).find((s) => s.compte.nom === nom)!.solde;
+  };
+  const idDe = async (nom: string) => (await base.comptes.toArray()).find((c) => c.nom === nom)!.id;
+  const preparer = async () => {
+    await repo.creerComptesParDefaut();
+    for (const c of await base.comptes.toArray()) await repo.enregistrerCompte({ id: c.id, nom: c.nom, type: c.type, soldeInitial: c.nom === 'Caisse' ? 20000 : c.nom === 'Wave' ? 50000 : 0, dateInitiale: aujourdhui(), modes: c.modes });
+  };
+
+  it('crée les comptes habituels une seule fois, avec leurs moyens de paiement', async () => {
+    await repo.creerComptesParDefaut();
+    await repo.creerComptesParDefaut();
+    const comptes = await base.comptes.toArray();
+    expect(comptes.map((c) => c.nom).sort()).toEqual(['Banque', 'Caisse', 'Orange Money', 'Wave']);
+    expect(comptes.find((c) => c.nom === 'Banque')?.modes).toEqual(['virement', 'cheque']);
+  });
+
+  it('un règlement par Wave entre dans le compte Wave, un paiement en espèces sort de la caisse', async () => {
+    await preparer();
+    await repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 30000, paye: false, acompte: 12000, mode: 'wave' });
+    await repo.ajouterOperation({ sens: 'depense', categorie: 'soins', montant: 5000, mode: 'especes' });
+    expect(await soldeDe('Wave')).toBe(62000);
+    expect(await soldeDe('Caisse')).toBe(15000);
+  });
+
+  it('refuse deux comptes pour le même moyen de paiement, un nom en double, un solde décimal', async () => {
+    await preparer();
+    await expect(repo.enregistrerCompte({ nom: 'Wave pro', type: 'mobile_money', soldeInitial: 0, dateInitiale: aujourdhui(), modes: ['wave'] })).rejects.toThrow(/déjà suivi/);
+    await expect(repo.enregistrerCompte({ nom: ' wave ', type: 'mobile_money', soldeInitial: 0, dateInitiale: aujourdhui(), modes: [] })).rejects.toThrow(/existe déjà/);
+    await expect(repo.enregistrerCompte({ nom: 'X', type: 'autre', soldeInitial: 10.5, dateInitiale: aujourdhui(), modes: [] })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.enregistrerCompte({ nom: 'X', type: 'autre', soldeInitial: 0, dateInitiale: '2999-01-01', modes: [] })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('un transfert déplace l’argent, ses frais sortent du compte d’origine et deviennent une dépense ; l’annuler rétablit tout', async () => {
+    await preparer();
+    const t = await repo.creerTransfert({ deId: await idDe('Wave'), versId: await idDe('Caisse'), montant: 30000, frais: 300 });
+    expect(await soldeDe('Wave')).toBe(50000 - 30300);
+    expect(await soldeDe('Caisse')).toBe(50000);
+    await repo.annuler(t);
+    expect(await soldeDe('Wave')).toBe(50000);
+    expect(await soldeDe('Caisse')).toBe(20000);
+  });
+
+  it('refuse un transfert vers le même compte, nul, ou avec des frais négatifs', async () => {
+    await preparer();
+    const w = await idDe('Wave');
+    const c = await idDe('Caisse');
+    await expect(repo.creerTransfert({ deId: w, versId: w, montant: 100 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.creerTransfert({ deId: w, versId: c, montant: 0 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.creerTransfert({ deId: w, versId: c, montant: 100, frais: -5 })).rejects.toBeInstanceOf(ErreurSaisie);
+    await expect(repo.creerTransfert({ deId: w, versId: 'inconnu', montant: 100 })).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('un comptage compare le solde réel au solde annoncé ; l’écart reste à expliquer jusqu’à ce qu’on le corrige', async () => {
+    await preparer();
+    const c = await idDe('Caisse');
+    const p = await repo.pointer({ compteId: c, soldeReel: 19000 });
+    expect(p.ecart).toBe(-1000);
+    expect(await base.pointages.get(p.id)).toMatchObject({ soldeTheorique: 20000, soldeReel: 19000, ecart: -1000, regularise: false });
+    expect(await soldeDe('Caisse')).toBe(20000);
+    await expect(repo.regulariserPointage(p.id, ' ')).rejects.toBeInstanceOf(ErreurSaisie);
+    await repo.regulariserPointage(p.id, 'rendu de monnaie');
+    expect(await soldeDe('Caisse')).toBe(19000);
+    expect((await repo.pointer({ compteId: c, soldeReel: 19000 })).ecart).toBe(0);
+  });
+
+  it('exige une explication pour corriger tout de suite, et accepte un comptage sans écart', async () => {
+    await preparer();
+    const c = await idDe('Caisse');
+    await expect(repo.pointer({ compteId: c, soldeReel: 21000, regulariser: true })).rejects.toThrow(/Expliquez/);
+    await repo.pointer({ compteId: c, soldeReel: 21000, regulariser: true, note: 'vente non notée' });
+    expect(await soldeDe('Caisse')).toBe(21000);
+  });
+
+  it('l’achat d’aliment payé par un moyen sort du compte correspondant', async () => {
+    await preparer();
+    await repo.ajouterAchatAliment({ quantiteKg: 50, prixTotal: 20000, mode: 'especes' });
+    expect(await soldeDe('Caisse')).toBe(0);
+  });
+
+  it('ne retire pas un compte qui a des transferts', async () => {
+    await preparer();
+    const w = await idDe('Wave');
+    const t = await repo.creerTransfert({ deId: w, versId: await idDe('Caisse'), montant: 100 });
+    await expect(repo.supprimerCompte(w)).rejects.toBeInstanceOf(ErreurSaisie);
+    await repo.annuler(t);
+    await repo.supprimerCompte(w);
+  });
+
+  it('sauvegarde aussi les comptes, transferts et comptages', async () => {
+    await preparer();
+    await repo.creerTransfert({ deId: await idDe('Wave'), versId: await idDe('Caisse'), montant: 100 });
+    await repo.pointer({ compteId: await idDe('Caisse'), soldeReel: 20000 });
+    const json = await repo.exporter();
+    await repo.toutEffacer();
+    await repo.importer(json);
+    expect([await base.comptes.count(), await base.transferts.count(), await base.pointages.count()]).toEqual([4, 1, 1]);
   });
 });

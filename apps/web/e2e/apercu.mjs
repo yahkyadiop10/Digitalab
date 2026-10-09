@@ -24,6 +24,14 @@ try {
   await app.getByText('Essayer avec des données d’exemple').first().click();
   await app.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
 
+  etape('1b trésorerie : comptes et écart à expliquer, avec les données d’exemple');
+  await app.getByRole('banner').getByRole('link', { name: 'Finances' }).click();
+  await app.getByText('Liquidités').first().waitFor();
+  await app.getByText(/1 écart de trésorerie à expliquer/).waitFor();
+  await app.locator('.tresorerie-resume').click();
+  await app.getByRole('heading', { name: 'Trésorerie' }).waitFor();
+  assert.equal(await app.locator('a.compte').count(), 4);
+
   etape('2 « Ajouter des données d’exemple » répond, même sans boîte de dialogue du navigateur');
   await app.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
   await app.getByRole('button', { name: 'Ajouter des données d’exemple' }).click();

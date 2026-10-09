@@ -1,4 +1,4 @@
-import { ajouterJours } from '@digitalab/core';
+import { ajouterJours, soldesComptes } from '@digitalab/core';
 import { db } from './db';
 import { aujourdhui, nouvelId, repo } from './repo';
 
@@ -81,6 +81,16 @@ export async function chargerDemo(): Promise<void> {
     lignes: [{ libelle: 'Plateaux d’œufs (30 œufs)', quantite: 30, prixUnitaire: 2500 }, { libelle: 'Poulets de chair', quantite: 2, prixUnitaire: 3000 }],
   });
   await repo.ajouterOperation({ sens: 'depense', categorie: 'transport', date: j(4), tiers: 'Transporteur Sow', montant: 9000, paye: false, acompte: 4000, mode: 'especes', echeance: j(1) });
+  // Trésorerie : les quatre comptes habituels avec un solde de départ, un transfert avec frais et un comptage de caisse avec un petit écart.
+  await repo.creerComptesParDefaut();
+  const depart: Record<string, number> = { Caisse: 85000, Wave: 120000, 'Orange Money': 45000, Banque: 300000 };
+  for (const c of await db.comptes.toArray()) await repo.enregistrerCompte({ id: c.id, nom: c.nom, type: c.type, soldeInitial: depart[c.nom] ?? 0, dateInitiale: j(10), modes: c.modes });
+  const comptes = await db.comptes.toArray();
+  const idDe = (nom: string) => comptes.find((c) => c.nom === nom)!.id;
+  await repo.creerTransfert({ deId: idDe('Wave'), versId: idDe('Caisse'), montant: 50000, frais: 500, date: j(1), note: 'Retrait pour les dépenses de la semaine' });
+  const theorique = soldesComptes({ comptes: await db.comptes.toArray(), operations: await db.operations.toArray(), paiements: await db.paiements.toArray(), entreesStock: await db.entreesStock.toArray(), transferts: await db.transferts.toArray(), pointages: [] })
+    .find((s) => s.compte.id === idDe('Caisse'))!.solde;
+  await repo.pointer({ compteId: idDe('Caisse'), soldeReel: theorique - 1500, note: 'Il manque 1 500 FCFA, peut-être un rendu de monnaie' });
   await repo.ecrireReglage('nomElevage', 'Ferme de démonstration');
   await repo.ecrireReglage('demarrageFait', true);
 }

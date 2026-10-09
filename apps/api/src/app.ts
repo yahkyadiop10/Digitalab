@@ -420,9 +420,11 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
    * Quand des zones sont données, le paramètre `$5` est la liste des bâtiments et cages autorisés.
    */
   function conditionsLecture(droits: string[], zones: string[]): { tables: TableSynchronisee[]; operation: (alias: string) => string; zone: string } {
-    const voitDepenses = aUnDroit(droits, ['finances.voir_depenses', 'finances.valider_depense', 'finances.valider_achat', 'finances.valider_paiement', 'finances.payer', 'finances.annuler_depense']);
-    const voitRecettes = aUnDroit(droits, ['finances.voir_recettes', 'finances.saisir_facture', 'finances.encaisser', 'finances.annuler_vente']);
-    const voitSalaires = aUnDroit(droits, fonctionsDuModule('salaires'));
+    // Voir les soldes des comptes suppose de voir les règlements qui les composent.
+    const voitTresorerie = aUnDroit(droits, fonctionsDuModule('tresorerie'));
+    const voitDepenses = voitTresorerie || aUnDroit(droits, ['finances.voir_depenses', 'finances.valider_depense', 'finances.valider_achat', 'finances.valider_paiement', 'finances.payer', 'finances.annuler_depense']);
+    const voitRecettes = voitTresorerie || aUnDroit(droits, ['finances.voir_recettes', 'finances.saisir_facture', 'finances.encaisser', 'finances.annuler_vente']);
+    const voitSalaires = voitTresorerie || aUnDroit(droits, fonctionsDuModule('salaires'));
     const lotEnZone = (organisation: string, idLot: string) =>
       `EXISTS (SELECT 1 FROM enregistrements zl WHERE zl.organisation_id = ${organisation} AND zl.table_nom = 'lots' AND zl.id = ${idLot} AND zl.donnees->>'logementId' = ANY($5::text[]))`;
     const operation = (a: string) =>
