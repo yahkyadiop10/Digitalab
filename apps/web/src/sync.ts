@@ -1,10 +1,18 @@
 import { normaliserTelephone, TABLES_SYNCHRONISEES, type EntreeJournal, tablesEcrivables, type ChangementSync, type DemandeSync, type DroitsMembre, type EnregistrementSync, type ReponseSync, type RoleMembre, type TableSynchronisee } from '@digitalab/core';
-import { db, type BaseElevage, type Connexion } from './db';
+import { db, TABLES_DONNEES, type BaseElevage, type Connexion } from './db';
+import type { ProprietaireAppareil } from './securite';
 import { URL_SERVEUR_APERCU, creerServeurDemo } from './serveur-demo';
 
 /** Le serveur a répondu par un refus (mauvais code, accès retiré, session expirée…). */
 export class ErreurServeur extends Error {
   constructor(readonly statut: number, message: string) {
+    super(message);
+  }
+}
+
+/** Cet appareil contient les données d'une autre personne ou d'un autre élevage : il faut les effacer avant de continuer. */
+export class ErreurAppareilAutre extends Error {
+  constructor(message: string, readonly nonEnvoyes: number) {
     super(message);
   }
 }
@@ -197,6 +205,14 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
     }
   }
 
+  /** Efface les données de l'élevage de cet appareil (pas le lien avec le compte). */
+  async function effacerDonnees(): Promise<void> {
+    await base.transaction('rw', TABLES_DONNEES.map((t) => base.table(t)), async () => {
+      for (const t of TABLES_DONNEES) await base.table(t).clear();
+    });
+    await base.appareil.delete('verrou');
+  }
+
   /** Une seule synchronisation à la fois ; un appel pendant qu'une autre tourne attend la même. */
   function synchroniser(): Promise<ResultatSync> {
     if (!enCours) {
@@ -227,12 +243,32 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       return { ...r, telephone: tel };
     },
 
-    /** Relie cet appareil à un élevage du serveur ; la première synchronisation envoie ce qui existe déjà ici et récupère le reste. */
-    async lier(url: string, jeton: string, telephone: string, org: OrganisationServeur): Promise<void> {
+    /**
+     * Relie cet appareil à un élevage du serveur ; la première synchronisation envoie ce qui existe déjà ici et récupère le reste.
+     * Si l'appareil contient les données d'une autre personne ou d'un autre élevage, il faut `effacer` : ces données sont retirées de l'appareil (elles restent sur le serveur).
+     */
+    async lier(url: string, jeton: string, telephone: string, org: OrganisationServeur, options: { effacer?: boolean } = {}): Promise<void> {
+      const proprietaire = (await base.appareil.get('proprietaire'))?.valeur as ProprietaireAppareil | undefined;
+      const autre = !!proprietaire && (proprietaire.organisationId !== org.id || proprietaire.telephone !== telephone);
+      if (autre && !options.effacer) {
+        throw new ErreurAppareilAutre(
+          proprietaire!.organisationId !== org.id
+            ? 'Cet appareil contient les données d’un autre élevage.'
+            : `Cet appareil contient les données de ${proprietaire!.telephone}.`,
+          proprietaire!.nonEnvoyes,
+        );
+      }
+      if (autre) await effacerDonnees();
       await base.connexion.put({
         cle: 'serveur', url: url.replace(/\/+$/, ''), jeton, telephone, organisationId: org.id, organisationNom: org.nom,
         role: org.role, droits: org.droits, zones: org.zones, ...(org.fonction ? { fonction: org.fonction } : {}), derniereSeq: 0, dernierEnvoi: 0,
       });
+      // Une fois relié, l'appareil ne s'ouvre plus sans compte : se déconnecter ramène à la page de connexion.
+      await base.appareil.bulkPut([
+        { cle: 'compteRequis', valeur: true },
+        { cle: 'proprietaire', valeur: { organisationId: org.id, telephone, nonEnvoyes: 0 } satisfies ProprietaireAppareil },
+      ]);
+      await base.appareil.delete('deconnecteAuto');
       await base.reglages.put({ cle: 'demarrageFait', valeur: true });
       const local = await base.reglages.get('nomElevage');
       const nomLocal = typeof local?.valeur === 'string' ? local.valeur.trim() : '';
@@ -249,16 +285,30 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       }
     },
 
-    /** Quitte le compte sur cet appareil. Les données restent ici ; elles ne sont plus échangées. */
-    async deconnecter(): Promise<void> {
+    /**
+     * Quitte le compte sur cet appareil : le jeton est détruit ici et sur le serveur. Les données restent sur l'appareil mais ne s'ouvrent
+     * qu'après une nouvelle connexion. Avec `auto`, la page de connexion explique qu'il s'agit d'une déconnexion pour inactivité.
+     */
+    async deconnecter(options: { auto?: boolean } = {}): Promise<void> {
       const c = await lire();
       if (!c) return;
+      const nonEnvoyes = (await modifications(c.dernierEnvoi, c.droits)).length;
       try {
         await appeler(c.url, '/v1/auth/deconnexion', { jeton: c.jeton, methode: 'POST' });
       } catch {
         /* sans réseau ou session déjà expirée : on oublie quand même la connexion ici */
       }
       await base.connexion.delete('serveur');
+      await base.appareil.put({ cle: 'proprietaire', valeur: { organisationId: c.organisationId, telephone: c.telephone, nonEnvoyes } satisfies ProprietaireAppareil });
+      await base.appareil.put({ cle: 'compteRequis', valeur: true });
+      if (options.auto) await base.appareil.put({ cle: 'deconnecteAuto', valeur: true });
+    },
+
+    /** Retire de cet appareil tout ce qui touche à l'élevage, au compte et au code : il repart comme neuf. */
+    async effacerAppareil(): Promise<void> {
+      await effacerDonnees();
+      await base.connexion.clear();
+      await base.appareil.clear();
     },
 
     async membres(): Promise<Membre[]> {

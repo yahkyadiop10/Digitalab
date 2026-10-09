@@ -1,6 +1,9 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { SEUILS_PAR_DEFAUT, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
+import { SEUILS_PAR_DEFAUT, problemeDeCode, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
 import { Champ, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { ErreurCode, securite, useAppareil } from '../securite';
+import { verrouillerMaintenant } from '../session';
+import { synchro } from '../sync';
 import { chargerDemo } from '../demo';
 import { peut, profilDe } from '../droits';
 import { redimensionnerLogo } from '../logo';
@@ -13,6 +16,8 @@ import type { Elevage } from '../useElevage';
 export function Reglages({ elevage }: { elevage: Elevage }) {
   return (
     <>
+      <h2>Session et sécurité</h2>
+      <SessionEtSecurite elevage={elevage} />
       <h2>Compte et équipe</h2>
       <CarteCompte />
       {peut(elevage, 'admin.utilisateurs') && (
@@ -56,6 +61,75 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
         AviMaster, version de travail. Vos données restent sur cet appareil (et sur le serveur si vous avez relié un compte) ; faites régulièrement une sauvegarde. L’application fonctionne sans connexion une fois chargée.
       </div>
     </>
+  );
+}
+
+function SessionEtSecurite({ elevage }: { elevage: Elevage }) {
+  const notifier = useNotifier();
+  const confirmer = useConfirmer();
+  const appareil = useAppareil();
+  const relie = elevage.moi.relie;
+  const { verrouillageMin, deconnexionMin } = elevage.politique;
+  const [mode, setMode] = useState<'aucun' | 'code'>('aucun');
+  const [ancien, setAncien] = useState('');
+  const [code, setCode] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [erreur, setErreur] = useState<string | null>(null);
+  const [lock, setLock] = useState(String(verrouillageMin));
+  const [decon, setDecon] = useState(String(deconnexionMin));
+
+  const enregistrerCode = async (e: FormEvent) => {
+    e.preventDefault();
+    const probleme = problemeDeCode(code);
+    if (probleme) return setErreur(probleme);
+    if (code !== confirmation) return setErreur('Les deux codes ne sont pas identiques.');
+    try {
+      await securite.definirCode(code, appareil?.aCode ? ancien : undefined);
+      notifier('Code enregistré ✓');
+      setMode('aucun');
+      setAncien(''); setCode(''); setConfirmation(''); setErreur(null);
+    } catch (err) {
+      setErreur(err instanceof ErreurCode ? err.message : 'Enregistrement impossible.');
+    }
+  };
+
+  return (
+    <div className="carte">
+      <p className="muet">
+        {relie || appareil?.aCode
+          ? `L’application se verrouille après ${verrouillageMin} minute${verrouillageMin > 1 ? 's' : ''} sans utilisation${relie ? ` et vous déconnecte après ${deconnexionMin} minute${deconnexionMin > 1 ? 's' : ''}` : ''}.`
+          : 'Sans compte, l’application reste ouverte. Vous pouvez la protéger par un code : elle se verrouillera quand vous ne l’utilisez plus.'}
+      </p>
+      <div className="rangee">
+        {appareil?.aCode && <button className="bouton court" onClick={() => verrouillerMaintenant(elevage.politique)}>🔒 Verrouiller maintenant</button>}
+        {relie && <button className="bouton alt court" onClick={async () => { if (await confirmer('Se déconnecter ? Vos données restent sur cet appareil, mais il faudra vous reconnecter avec un code pour les rouvrir.')) await synchro.deconnecter(); }}>Se déconnecter</button>}
+        <button className="bouton alt court" onClick={() => setMode(mode === 'code' ? 'aucun' : 'code')}>{appareil?.aCode ? 'Changer mon code' : 'Définir un code de verrouillage'}</button>
+      </div>
+      {mode === 'code' && (
+        <form onSubmit={enregistrerCode}>
+          {appareil?.aCode && <Champ libelle="Code actuel"><input type="password" inputMode="numeric" autoComplete="current-password" maxLength={6} value={ancien} onChange={(e) => setAncien(e.target.value.replace(/\D/g, ''))} /></Champ>}
+          <Champ libelle="Nouveau code (4 à 6 chiffres)"><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></Champ>
+          <Champ libelle="Confirmez le nouveau code"><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={confirmation} onChange={(e) => setConfirmation(e.target.value.replace(/\D/g, ''))} /></Champ>
+          {erreur && <p className="erreur" role="alert">{erreur}</p>}
+          <button className="bouton court" disabled={code.length < 4}>Enregistrer le code</button>
+          {!relie && appareil?.aCode && (
+            <button type="button" className="lien danger" onClick={async () => { try { await securite.retirerCode(ancien); notifier('Code retiré'); setMode('aucun'); } catch { setErreur('Entrez votre code actuel pour le retirer.'); } }}>Retirer le code</button>
+          )}
+        </form>
+      )}
+      {peut(elevage, 'admin.elevage') && relie && (
+        <>
+          <h3>Délais de la ferme</h3>
+          <p className="muet">Valables pour toutes les personnes de l’élevage. Le verrouillage se débloque avec le code, même sans réseau ; la déconnexion demande un nouveau code de connexion, donc du réseau.</p>
+          <div className="duo">
+            <Champ libelle="Verrouiller après (minutes)"><input inputMode="numeric" value={lock} onChange={(e) => setLock(e.target.value)} /></Champ>
+            <Champ libelle="Déconnecter après (minutes)"><input inputMode="numeric" value={decon} onChange={(e) => setDecon(e.target.value)} /></Champ>
+          </div>
+          <button className="bouton alt court" onClick={async () => { await repo.enregistrerProfil({ securite: { verrouillageMin: Number(lock), deconnexionMin: Number(decon) } }); notifier('Délais enregistrés ✓'); }}>Enregistrer les délais</button>
+        </>
+      )}
+      <p className="muet">Le verrouillage cache l’application mais ne chiffre pas les données de l’appareil : gardez aussi le verrouillage d’écran de votre téléphone.</p>
+    </div>
   );
 }
 

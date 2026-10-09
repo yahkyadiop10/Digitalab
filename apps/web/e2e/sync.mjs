@@ -49,6 +49,14 @@ async function appareil(nom) {
 /** Attend qu'un texte apparaisse dans la page (même réparti sur plusieurs éléments). */
 const voir = (page, re) => page.waitForFunction(([src, fl]) => new RegExp(src, fl).test(document.body.innerText), [re.source, re.flags]);
 
+/** Après une première connexion, l'application impose de choisir un code de verrouillage. */
+async function choisirCode(page) {
+  await page.getByRole('heading', { name: 'Choisissez votre code' }).waitFor();
+  await page.getByLabel('Votre code (4 à 6 chiffres)').fill('2580');
+  await page.getByLabel('Confirmez le code').fill('2580');
+  await page.getByRole('button', { name: 'Enregistrer mon code' }).click();
+}
+
 async function connecter(page, telephone) {
   await page.getByLabel('Votre numéro de téléphone').fill(telephone);
   await page.getByLabel('Adresse du serveur').fill(URL_API);
@@ -57,6 +65,7 @@ async function connecter(page, telephone) {
   const code = (await page.locator('form b').last().innerText()).trim();
   await page.getByLabel('Code reçu').fill(code);
   await page.getByRole('button', { name: 'Valider' }).click();
+  await choisirCode(page);
 }
 
 async function synchroniser(page) {
@@ -113,6 +122,7 @@ try {
   await v.page.getByRole('button', { name: 'J’ai déjà un code donné par mon administrateur' }).click();
   await v.page.getByLabel('Code reçu').fill(codeInvitation);
   await v.page.getByRole('button', { name: 'Valider' }).click();
+  await choisirCode(v.page);
   await v.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   await voir(v.page, /20\s+animaux/);
   // Son menu ne montre que ses modules : pas de finances, pas de quarantaine d'arrivée.

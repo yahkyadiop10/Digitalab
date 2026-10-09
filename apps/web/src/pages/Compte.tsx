@@ -4,7 +4,8 @@ import { LIBELLES_PROFILS, normaliserTelephone, tablesEcrivables } from '@digita
 import { Champ, Retour, useNotifier, useConfirmer } from '../components/ui';
 import { db, type Connexion } from '../db';
 import { aller } from '../route';
-import { ErreurReseau, ErreurServeur, MODE_APERCU, URL_SERVEUR_DEFAUT, synchro, type OrganisationServeur, type ResultatSync } from '../sync';
+import { marquerActivite } from '../session';
+import { ErreurAppareilAutre, ErreurReseau, ErreurServeur, MODE_APERCU, URL_SERVEUR_DEFAUT, synchro, type OrganisationServeur, type ResultatSync } from '../sync';
 
 export const useConnexion = (): Connexion | undefined | null => useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
 
@@ -54,8 +55,10 @@ export function PageCompte() {
   );
 }
 
-function FormConnexion() {
+/** Connexion par numéro de téléphone et code. `apres` s'exécute une fois l'appareil relié. */
+export function FormConnexion({ apres }: { apres?: () => void } = {}) {
   const notifier = useNotifier();
+  const [autre, setAutre] = useState<{ message: string; nonEnvoyes: number; session: { jeton: string; telephone: string }; org: OrganisationServeur } | null>(null);
   const [url, setUrl] = useState(URL_SERVEUR_DEFAUT);
   const [telephone, setTelephone] = useState('');
   const [code, setCode] = useState('');
@@ -89,10 +92,19 @@ function FormConnexion() {
     });
   };
 
-  const lier = async (s: { jeton: string; telephone: string }, org: OrganisationServeur) => {
-    await synchro.lier(url.trim(), s.jeton, s.telephone, org);
+  const lier = async (s: { jeton: string; telephone: string }, org: OrganisationServeur, effacer = false) => {
+    try {
+      await synchro.lier(url.trim(), s.jeton, s.telephone, org, { effacer });
+    } catch (e) {
+      // L'appareil contenait les données de quelqu'un d'autre : on demande avant d'effacer.
+      if (e instanceof ErreurAppareilAutre) return setAutre({ message: e.message, nonEnvoyes: e.nonEnvoyes, session: s, org });
+      throw e;
+    }
+    setAutre(null);
+    marquerActivite();
     notifier('Appareil relié ✓');
-    aller('accueil');
+    if (apres) apres();
+    else aller('accueil');
     void synchro.synchroniser();
   };
 
@@ -105,6 +117,19 @@ function FormConnexion() {
       setEtape('choix');
     });
   };
+
+  if (autre) {
+    return (
+      <div className="carte">
+        <h3>{autre.message}</h3>
+        <p>Pour continuer, ces données doivent être effacées de cet appareil. Ce qui a été envoyé au serveur y reste.</p>
+        {autre.nonEnvoyes > 0 && <p className="erreur">Attention : {autre.nonEnvoyes} saisie{autre.nonEnvoyes > 1 ? 's' : ''} faite{autre.nonEnvoyes > 1 ? 's' : ''} sur cet appareil n’a{autre.nonEnvoyes > 1 ? 'ont' : ''} jamais été envoyée{autre.nonEnvoyes > 1 ? 's' : ''} et sera perdue. Reconnectez d’abord la personne concernée pour les envoyer.</p>}
+        <button className="bouton" disabled={occupe} onClick={() => void executer(() => lier(autre.session, autre.org, true))}>Effacer cet appareil et continuer</button>
+        <button className="lien" onClick={() => setAutre(null)}>Annuler</button>
+        {erreur && <p className="erreur" role="alert">{erreur}</p>}
+      </div>
+    );
+  }
 
   if (etape === 'choix' && session) {
     return (
@@ -122,9 +147,11 @@ function FormConnexion() {
 
   return (
     <>
-      <div className="carte muet">
-        Sans compte, tout fonctionne déjà sur cet appareil. Avec un compte, vos données sont aussi gardées sur le serveur et partagées avec vos aides et votre vétérinaire, sur leurs propres téléphones. Vous pouvez continuer à saisir sans réseau : tout est envoyé dès que la connexion revient.
-      </div>
+      {!apres && (
+        <div className="carte muet">
+          Sans compte, tout fonctionne déjà sur cet appareil. Avec un compte, vos données sont aussi gardées sur le serveur et partagées avec vos aides et votre vétérinaire, sur leurs propres téléphones. Vous pouvez continuer à saisir sans réseau : tout est envoyé dès que la connexion revient.
+        </div>
+      )}
       {etape === 'telephone' ? (
         <form className="carte" onSubmit={demander}>
           <Champ libelle="Votre numéro de téléphone" aide="Un code à 6 chiffres vous sera envoyé. Pas de mot de passe à retenir.">
@@ -172,7 +199,6 @@ function FormConnexion() {
 
 function Connecte({ connexion }: { connexion: Connexion }) {
   const confirmer = useConfirmer();
-  const notifier = useNotifier();
   const [enCours, setEnCours] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => synchro.abonner((e) => setEnCours(e.enCours)), []);
@@ -185,9 +211,8 @@ function Connecte({ connexion }: { connexion: Connexion }) {
   };
 
   const quitter = async () => {
-    if (!await confirmer('Se déconnecter de cet appareil ? Vos données restent ici, mais ne seront plus échangées avec le serveur.')) return;
+    if (!await confirmer('Se déconnecter ? Vos données restent sur cet appareil, mais il faudra vous reconnecter avec un code pour les rouvrir.')) return;
     await synchro.deconnecter();
-    notifier('Déconnecté');
   };
 
   return (

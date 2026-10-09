@@ -274,4 +274,6 @@ export interface ProfilElevage extends Enregistrement {
   ninea?: string;
   /** Logo en image (data:image/…;base64,…), réduit pour rester léger. */
   logo?: string;
+  /** Délais de verrouillage et de déconnexion décidés par l'administrateur. */
+  securite?: { verrouillageMin: number; deconnexionMin: number };
 }

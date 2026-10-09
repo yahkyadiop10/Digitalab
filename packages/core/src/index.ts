@@ -8,6 +8,7 @@ export * from './journal';
 export * from './parametres';
 export * from './permissions';
 export * from './quarantaine';
+export * from './securite';
 export * from './sante';
 export * from './sync';
 export * from './tableau';

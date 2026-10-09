@@ -36,6 +36,12 @@ export interface Connexion {
   erreur?: string;
 }
 
+/** Réglages propres à l'appareil et à la sécurité (code de verrouillage, compte requis…). Jamais sauvegardés ni synchronisés. */
+export interface LigneAppareil {
+  cle: string;
+  valeur: unknown;
+}
+
 export class BaseElevage extends Dexie {
   logements!: Table<Logement, string>;
   lots!: Table<Lot, string>;
@@ -59,6 +65,7 @@ export class BaseElevage extends Dexie {
   pointages!: Table<Pointage, string>;
   reglages!: Table<Reglage, string>;
   connexion!: Table<Connexion, string>;
+  appareil!: Table<LigneAppareil, string>;
   etatsAlertes!: Table<EtatAlerte, string>;
 
   constructor(nom = 'digitalab') {
@@ -103,6 +110,9 @@ export class BaseElevage extends Dexie {
       comptes: 'id',
       transferts: 'id, date',
       pointages: 'id, compteId, date',
+    });
+    this.version(10).stores({
+      appareil: 'cle',
     });
   }
 }

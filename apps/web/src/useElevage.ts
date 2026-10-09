@@ -10,6 +10,8 @@ import {
   type CompteTresorerie,
   type Employe,
   type Pointage,
+  type PolitiqueSession,
+  normaliserPolitique,
   type Transfert,
   type OperationFinanciere,
   type Paiement,
@@ -40,6 +42,8 @@ export interface Elevage {
   employes: Employe[];
   /** Nom, coordonnées et logo de l'élevage (imprimés sur les documents). */
   profil: ProfilElevage | undefined;
+  /** Délais de verrouillage et de déconnexion de la ferme. */
+  politique: PolitiqueSession;
   /** Trésorerie : comptes (caisse, Wave…), transferts entre comptes et comptages. */
   comptes: CompteTresorerie[];
   transferts: Transfert[];
@@ -136,6 +140,7 @@ export function useElevage(): Elevage | null {
       quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
     };
     return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), profil: vivants(profils).find((p) => p.id === 'elevage'),
+      politique: normaliserPolitique(vivants(profils).find((p) => p.id === 'elevage')?.securite),
       comptes: vivants(comptes), transferts: vivants(transferts), pointages: vivants(pointages),
       moi: connexion ? { droits: connexion.droits, zones: connexion.zones, role: connexion.role, relie: true, ...(connexion.fonction ? { fonction: connexion.fonction } : {}) } : { droits: TOUTES_LES_FONCTIONS, zones: [], role: 'proprietaire', relie: false }, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
   }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, profils, comptes, transferts, pointages, connexion, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);

@@ -181,7 +181,7 @@ export function Retour({ vers, libelle = 'Retour' }: { vers: string; libelle?: s
 }
 
 /** Boutons de l'en-tête : alertes (avec compteur) et réglages. */
-export function OutilsEntete({ nbAlertes, compte = null, finances = true }: { nbAlertes: number; compte?: { erreur: boolean } | null; finances?: boolean }) {
+export function OutilsEntete({ nbAlertes, compte = null, finances = true, onVerrouiller }: { nbAlertes: number; compte?: { erreur: boolean } | null; finances?: boolean; onVerrouiller?: () => void }) {
   const { segments } = useRoute();
   const actif = segments[0];
   return (
@@ -197,6 +197,7 @@ export function OutilsEntete({ nbAlertes, compte = null, finances = true }: { nb
           {compte.erreur && <i className="pastille">!</i>}
         </a>
       )}
+      {onVerrouiller && <button type="button" className="outil-bouton" aria-label="Verrouiller l’application" onClick={onVerrouiller}><span aria-hidden="true">🔒</span></button>}
       <a href="#/reglages" aria-label="Réglages" className={actif === 'reglages' ? 'actif' : ''}><span aria-hidden="true">⚙️</span></a>
     </div>
   );

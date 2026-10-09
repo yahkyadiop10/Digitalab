@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { jourLocal } from '@digitalab/core';
+import { POLITIQUE_SESSION_DEFAUT, jourLocal } from '@digitalab/core';
 import { Embleme, LogoProduit, Pied } from './components/Marque';
+import { CreerCode, PorteConnexion, Verrou } from './components/PortesSession';
 import { Navigation, FournisseurNotif, OutilsEntete } from './components/ui';
 import { db } from './db';
 import { Accueil } from './pages/Accueil';
@@ -23,6 +24,8 @@ import { Reglages } from './pages/Reglages';
 import { Saisie } from './pages/Saisie';
 import { aLeModule, droitsRequis, peutUn, profilDe } from './droits';
 import { useRoute } from './route';
+import { useAppareil } from './securite';
+import { useSession } from './session';
 import { synchro } from './sync';
 import { useElevage, type Elevage } from './useElevage';
 
@@ -112,8 +115,19 @@ function Racine() {
 
 export const App = Racine;
 
+/** Avant de se déconnecter pour inactivité, on essaie d'envoyer ce qui n'est pas encore parti (sans attendre plus de quelques secondes). */
+async function deconnecterPourInactivite() {
+  try {
+    await Promise.race([synchro.synchroniser(), new Promise((r) => setTimeout(r, 4000))]);
+  } catch {
+    /* pas de réseau : les saisies restent sur l'appareil et partiront à la prochaine connexion */
+  }
+  await synchro.deconnecter({ auto: true });
+}
+
 function Application() {
   const elevage = useElevage();
+  const appareil = useAppareil();
   const [stockageBloque, setStockageBloque] = useState(false);
   const route = useRoute();
   const connexion = useConnexion();
@@ -122,6 +136,13 @@ function Application() {
   useEffect(() => {
     db.open().catch(() => setStockageBloque(true));
   }, []);
+  // La surveillance de l'inactivité ne tourne que si elle sert : un code existe (verrouillage) ou un compte est relié (déconnexion).
+  const session = useSession({
+    active: !!elevage && !!appareil && (appareil.aCode || relie),
+    politique: elevage?.politique ?? POLITIQUE_SESSION_DEFAUT,
+    connecte: relie,
+    surDeconnexion: () => void deconnecterPourInactivite(),
+  });
   if (stockageBloque) {
     return (
       <main className="demarrage">
@@ -130,7 +151,18 @@ function Application() {
       </main>
     );
   }
-  if (!elevage) return <p className="chargement">Chargement…</p>;
+  if (!elevage || !appareil) return <p className="chargement">Chargement…</p>;
+  // Un appareil relié à un compte ne s'ouvre qu'avec ce compte : après une déconnexion, on retrouve la page de connexion.
+  if (appareil.compteRequis && !relie) {
+    return <FournisseurNotif><PorteConnexion deconnecteAuto={appareil.deconnecteAuto} nom={elevage.reglages.nomElevage} /></FournisseurNotif>;
+  }
+  // Une personne connectée choisit un code de verrouillage avant d'aller plus loin.
+  if (relie && !appareil.aCode) {
+    return <FournisseurNotif><CreerCode onFait={() => session.deverrouiller()} /></FournisseurNotif>;
+  }
+  if (appareil.aCode && session.etat !== 'actif') {
+    return <FournisseurNotif><Verrou elevage={elevage} connecte={relie} surDeverrouillage={session.deverrouiller} /></FournisseurNotif>;
+  }
   if (!elevage.reglages.demarrageFait && elevage.donnees.lots.length === 0) {
     if (route.segments[0] === 'compte') return <FournisseurNotif><div className="bandeau-marque"><LogoProduit /></div><main><PageCompte /><Pied /></main></FournisseurNotif>;
     return <FournisseurNotif><Demarrage /></FournisseurNotif>;
@@ -146,7 +178,12 @@ function Application() {
           <h1>{profil.nom}</h1>
           {elevage.moi.fonction && <small>{elevage.moi.fonction}</small>}
         </div>
-        <OutilsEntete nbAlertes={nbAlertes} finances={aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires') || aLeModule(elevage, 'tresorerie')} compte={connexion ? { erreur: Boolean(connexion.erreur) } : null} />
+        <OutilsEntete
+          nbAlertes={nbAlertes}
+          finances={aLeModule(elevage, 'finances') || aLeModule(elevage, 'salaires') || aLeModule(elevage, 'tresorerie')}
+          compte={connexion ? { erreur: Boolean(connexion.erreur) } : null}
+          {...(appareil.aCode ? { onVerrouiller: session.verrouiller } : {})}
+        />
       </header>
       <main>
         <Page elevage={elevage} />

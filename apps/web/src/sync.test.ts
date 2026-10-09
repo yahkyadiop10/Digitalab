@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { droitsEffectifs, peutEcrireTable, type ChangementSync, type DemandeSync, type DroitsMembre, type ReponseSync, type RoleMembre } from '@digitalab/core';
 import { BaseElevage } from './db';
 import { creerRepo } from './repo';
-import { creerSynchro, type Fetch } from './sync';
+import { ErreurAppareilAutre, creerSynchro, type Fetch } from './sync';
 
 /** Un petit serveur en mémoire qui applique la même règle que le vrai : la version la plus récente l'emporte. */
 function fauxServeur(limite = 1000) {
@@ -223,5 +223,67 @@ describe('synchronisation côté appareil', () => {
     const avant = (await a.base.logements.get(id))!.misAJour;
     await a.repo.modifierLogement(id, { nom: 'B', type: 'batiment', surfaceM2: 1 });
     expect((await a.base.logements.get(id))!.misAJour).toBeGreaterThan(avant);
+  });
+});
+
+describe('appareil relié à un compte', () => {
+  const org = (id: string, role: RoleMembre = 'proprietaire') => ({ id, nom: 'Ferme', role, droits: droitsEffectifs(role, null), zones: [] as string[] });
+
+  it('une fois relié, l’appareil ne s’ouvre plus sans compte, même après déconnexion', async () => {
+    const serveur = fauxServeur();
+    const a = await appareil(serveur);
+    expect((await a.base.appareil.get('compteRequis'))?.valeur).toBe(true);
+    await a.synchro.deconnecter();
+    expect(await a.synchro.lire()).toBeUndefined();
+    expect((await a.base.appareil.get('compteRequis'))?.valeur).toBe(true);
+    // Les données restent sur l'appareil.
+    expect(await a.base.logements.count()).toBe(0);
+  });
+
+  it('garde les données quand la même personne se reconnecte et renvoie ce qui n’était pas parti', async () => {
+    const serveur = fauxServeur();
+    const a = await appareil(serveur);
+    await a.repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: 10 });
+    await a.synchro.deconnecter({ auto: true });
+    expect((await a.base.appareil.get('deconnecteAuto'))?.valeur).toBe(true);
+    expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ nonEnvoyes: 1 });
+    await a.synchro.lier('http://serveur.test', 'jeton2', '+221771234567', org('org-1'));
+    expect((await a.base.appareil.get('deconnecteAuto'))).toBeUndefined();
+    expect(await a.base.logements.count()).toBe(1);
+    await a.synchro.synchroniser();
+    expect(serveur.lignes.size).toBe(1);
+  });
+
+  it('refuse de mélanger les données d’une autre personne ou d’un autre élevage, sauf si l’on efface l’appareil', async () => {
+    const serveur = fauxServeur();
+    const a = await appareil(serveur);
+    await a.repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: 10 });
+    await a.synchro.deconnecter();
+    await expect(a.synchro.lier('http://serveur.test', 'j', '+221779999999', org('org-1', 'soigneur'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
+    await expect(a.synchro.lier('http://serveur.test', 'j', '+221771234567', org('org-2'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
+    expect(await a.base.logements.count()).toBe(1);
+    await a.synchro.lier('http://serveur.test', 'j', '+221779999999', org('org-1', 'soigneur'), { effacer: true });
+    expect(await a.base.logements.count()).toBe(0);
+    expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ telephone: '+221779999999' });
+  });
+
+  it('prévient du nombre de saisies jamais envoyées avant d’effacer', async () => {
+    const serveur = fauxServeur();
+    const a = await appareil(serveur);
+    await a.repo.creerLogement({ nom: 'A', type: 'batiment', surfaceM2: 1 });
+    await a.repo.creerLogement({ nom: 'B', type: 'batiment', surfaceM2: 1 });
+    await a.synchro.deconnecter();
+    const e = await a.synchro.lier('http://serveur.test', 'j', '+221770000000', org('org-1')).catch((x) => x);
+    expect(e).toBeInstanceOf(ErreurAppareilAutre);
+    expect(e.nonEnvoyes).toBe(2);
+  });
+
+  it('effacer l’appareil le remet à neuf : plus de compte requis, plus de code', async () => {
+    const serveur = fauxServeur();
+    const a = await appareil(serveur);
+    await a.base.appareil.put({ cle: 'verrou', valeur: { sel: 'x' } });
+    await a.synchro.effacerAppareil();
+    expect(await a.base.appareil.count()).toBe(0);
+    expect(await a.base.connexion.count()).toBe(0);
   });
 });

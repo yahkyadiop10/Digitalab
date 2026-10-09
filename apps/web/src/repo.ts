@@ -1,4 +1,4 @@
-import { COMPTES_PAR_DEFAUT, effectifs, jourLocal, MODES_PAIEMENT, soldesComptes, type CompteTresorerie, type TypeCompte, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { COMPTES_PAR_DEFAUT, normaliserPolitique, effectifs, jourLocal, MODES_PAIEMENT, soldesComptes, type CompteTresorerie, type TypeCompte, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
@@ -406,11 +406,12 @@ export function creerRepo(base: BaseElevage = db) {
     },
 
     /** Informations imprimées sur les factures et logo : une seule fiche, partagée entre les appareils. */
-    async enregistrerProfil(d: { adresse?: string; telephone?: string; ninea?: string; logo?: string | null; nom?: string }): Promise<void> {
+    async enregistrerProfil(d: { adresse?: string; telephone?: string; ninea?: string; logo?: string | null; nom?: string; securite?: { verrouillageMin: number; deconnexionMin: number } }): Promise<void> {
       if (d.logo && d.logo.length > 40_000) throw new ErreurSaisie('Ce logo est trop lourd. Choisissez une image plus petite.');
       const actuel = await base.profil.get('elevage');
       const suite: Record<string, unknown> = {};
       for (const cle of ['nom', 'adresse', 'telephone', 'ninea'] as const) if (d[cle] !== undefined) suite[cle] = d[cle]!.trim();
+      if (d.securite) suite['securite'] = normaliserPolitique(d.securite);
       if (d.logo === null) suite['logo'] = undefined;
       else if (d.logo) suite['logo'] = d.logo;
       await base.profil.put({ ...(actuel ?? {}), ...suite, id: 'elevage', misAJour: maintenant() } as ProfilElevage);
