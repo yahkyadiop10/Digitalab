@@ -1,0 +1,147 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import {
+  effectifs,
+  evaluerAlertes,
+  rangNiveau,
+  type Alerte,
+  type DonneesElevage,
+  type Niveau,
+  type CompteTresorerie,
+  type Employe,
+  type Pointage,
+  type PolitiqueSession,
+  normaliserPolitique,
+  type Transfert,
+  type OperationFinanciere,
+  type Paiement,
+  type ProfilElevage,
+  filtrerParZones,
+  TOUTES_LES_FONCTIONS,
+  type Tiers,
+} from '@digitalab/core';
+import { db, type EtatAlerte } from './db';
+import { fusionnerReglages, type Reglages } from './reglages';
+import type { Noms } from './i18n/fr';
+
+export type { Reglages };
+const vivants = <T extends { supprimeLe?: number | null }>(xs: T[] | undefined): T[] => (xs ?? []).filter((x) => !x.supprimeLe);
+
+export interface AlerteEtat {
+  alerte: Alerte;
+  priseEnCharge: boolean;
+}
+
+export interface Elevage {
+  donnees: DonneesElevage;
+  /** Dépenses et recettes saisies (hors achats d'aliment du stock). */
+  operations: OperationFinanciere[];
+  /** Règlements enregistrés (acomptes, soldes), clients et fournisseurs, employés. */
+  paiements: Paiement[];
+  tiers: Tiers[];
+  employes: Employe[];
+  /** Nom, coordonnées et logo de l'élevage (imprimés sur les documents). */
+  profil: ProfilElevage | undefined;
+  /** Délais de verrouillage et de déconnexion de la ferme. */
+  politique: PolitiqueSession;
+  /** Trésorerie : comptes (caisse, Wave…), transferts entre comptes et comptages. */
+  comptes: CompteTresorerie[];
+  transferts: Transfert[];
+  pointages: Pointage[];
+  /** Fonction, droits et bâtiments réservés de la personne connectée ; sans compte relié, tous les droits. */
+  moi: { fonction?: string; droits: string[]; zones: string[]; role: string; relie: boolean };
+  reglages: Reglages;
+  effectifParLot: Map<string, number>;
+  alertes: AlerteEtat[];
+  /** Niveau le plus grave parmi les alertes non encore prises en charge. */
+  niveauGlobal: Niveau | 'vert';
+  noms: Noms;
+  maintenant: Date;
+}
+
+/** Applique les choix « pris en charge » et « reporter » aux alertes calculées. */
+export function appliquerEtats(alertes: Alerte[], etats: EtatAlerte[], maintenant: number): AlerteEtat[] {
+  const parCle = new Map(etats.map((e) => [e.cle, e]));
+  const out: AlerteEtat[] = [];
+  for (const a of alertes) {
+    const e = parCle.get(a.cle);
+    if (e?.statut === 'reportee' && (e.jusqua ?? 0) > maintenant) continue;
+    out.push({ alerte: a, priseEnCharge: e?.statut === 'prise_en_charge' });
+  }
+  return out;
+}
+
+export function niveauGlobal(alertes: AlerteEtat[]): Niveau | 'vert' {
+  let max: Niveau | 'vert' = 'vert';
+  for (const { alerte, priseEnCharge } of alertes) {
+    if (priseEnCharge) continue;
+    if (max === 'vert' || rangNiveau(alerte.niveau) > rangNiveau(max)) max = alerte.niveau;
+  }
+  return max;
+}
+
+/** Toutes les données de l'élevage, tenues à jour en direct. `null` pendant le chargement. */
+export function useElevage(): Elevage | null {
+  const [maintenant, setMaintenant] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setMaintenant(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const lots = useLiveQuery(() => db.lots.toArray(), []);
+  const logements = useLiveQuery(() => db.logements.toArray(), []);
+  const mouvements = useLiveQuery(() => db.mouvements.toArray(), []);
+  const pontes = useLiveQuery(() => db.pontes.toArray(), []);
+  const distributions = useLiveQuery(() => db.distributions.toArray(), []);
+  const entreesStock = useLiveQuery(() => db.entreesStock.toArray(), []);
+  const couveuses = useLiveQuery(() => db.couveuses.toArray(), []);
+  const incubations = useLiveQuery(() => db.incubations.toArray(), []);
+  const mirages = useLiveQuery(() => db.mirages.toArray(), []);
+  const evenementsSante = useLiveQuery(() => db.evenementsSante.toArray(), []);
+  const operations = useLiveQuery(() => db.operations.toArray(), []);
+  const paiements = useLiveQuery(() => db.paiements.toArray(), []);
+  const tiers = useLiveQuery(() => db.tiers.toArray(), []);
+  const employes = useLiveQuery(() => db.employes.toArray(), []);
+  const profils = useLiveQuery(() => db.profil.toArray(), []);
+  const connexion = useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
+  const comptes = useLiveQuery(() => db.comptes.toArray(), []);
+  const transferts = useLiveQuery(() => db.transferts.toArray(), []);
+  const pointages = useLiveQuery(() => db.pointages.toArray(), []);
+  const quarantaines = useLiveQuery(() => db.quarantaines.toArray(), []);
+  const notesQuarantaine = useLiveQuery(() => db.notesQuarantaine.toArray(), []);
+  const reglagesBruts = useLiveQuery(() => db.reglages.toArray(), []);
+  const etats = useLiveQuery(() => db.etatsAlertes.toArray(), []);
+
+  return useMemo(() => {
+    if (!lots || !logements || !mouvements || !pontes || !distributions || !entreesStock || !couveuses || !incubations || !mirages || !evenementsSante || !comptes || !transferts || !pointages || !profils || connexion === undefined || !operations || !paiements || !tiers || !employes || !quarantaines || !notesQuarantaine || !reglagesBruts || !etats) return null;
+    const zones = connexion?.zones ?? [];
+    const completes: DonneesElevage = {
+      lots: vivants(lots),
+      logements: vivants(logements),
+      mouvements: vivants(mouvements),
+      pontes: vivants(pontes),
+      distributions: vivants(distributions),
+      entreesStock: vivants(entreesStock),
+      couveuses: vivants(couveuses),
+      incubations: vivants(incubations),
+      mirages: vivants(mirages),
+      evenementsSante: vivants(evenementsSante),
+      quarantaines: vivants(quarantaines),
+      notesQuarantaine: vivants(notesQuarantaine),
+    };
+    // Une personne chargée d'un bâtiment ne voit que celui-ci : tous les écrans et tous les calculs s'en trouvent restreints d'un coup.
+    const donnees = filtrerParZones(completes, zones);
+    const reglages = fusionnerReglages(Object.fromEntries(reglagesBruts.map((r) => [r.cle, r.valeur])));
+    const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils, protocoles: reglages.protocoles }), etats, maintenant.getTime());
+    const noms: Noms = {
+      lot: (id) => donnees.lots.find((l) => l.id === id)?.nom ?? 'Lot',
+      logement: (id) => donnees.logements.find((l) => l.id === id)?.nom ?? 'Local',
+      incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
+      quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
+    };
+    return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), profil: vivants(profils).find((p) => p.id === 'elevage'),
+      politique: normaliserPolitique(vivants(profils).find((p) => p.id === 'elevage')?.securite),
+      comptes: vivants(comptes), transferts: vivants(transferts), pointages: vivants(pointages),
+      moi: connexion ? { droits: connexion.droits, zones: connexion.zones, role: connexion.role, relie: true, ...(connexion.fonction ? { fonction: connexion.fonction } : {}) } : { droits: TOUTES_LES_FONCTIONS, zones: [], role: 'proprietaire', relie: false }, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };
+  }, [lots, logements, mouvements, pontes, distributions, entreesStock, couveuses, incubations, mirages, evenementsSante, operations, paiements, tiers, employes, profils, comptes, transferts, pointages, connexion, quarantaines, notesQuarantaine, reglagesBruts, etats, maintenant]);
+}

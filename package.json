@@ -1,0 +1,24 @@
+{
+  "name": "digitalab",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Système de gestion d'élevage simple et adaptatif",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @digitalab/web",
+    "build": "npm run build -w @digitalab/web",
+    "preview": "npm run preview -w @digitalab/web",
+    "test": "npm run test -w @digitalab/core && npm run test -w @digitalab/web && npm run test -w @digitalab/api",
+    "typecheck": "npm run typecheck -w @digitalab/core && npm run typecheck -w @digitalab/web && npm run typecheck -w @digitalab/api",
+    "e2e": "node apps/web/e2e/offline.mjs",
+    "e2e:synchro": "node apps/web/e2e/sync.mjs",
+    "api": "npm run start -w @digitalab/api",
+    "e2e:apercu": "npm run apercu -w @digitalab/web && node apps/web/e2e/apercu.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
