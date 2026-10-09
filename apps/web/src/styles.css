@@ -118,7 +118,7 @@ a { color: inherit; }
 .champ { display: block; margin: 12px 0 4px; }
 .champ > label { display: block; color: var(--muet); font-size: 15px; margin-bottom: 4px; }
 .champ small { display: block; color: var(--muet); margin-top: 4px; }
-input[type='text'], input[type='date'], input:not([type]), select, input[inputmode] { width: 100%; padding: 13px; border: 2px solid var(--trait); border-radius: 14px; font: inherit; background: var(--carte); color: var(--encre); min-height: 50px; }
+input[type='text'], input[type='date'], input[type='password'], input:not([type]), select, input[inputmode] { width: 100%; padding: 13px; border: 2px solid var(--trait); border-radius: 14px; font: inherit; background: var(--carte); color: var(--encre); min-height: 50px; }
 :focus-visible { outline: 3px solid var(--jaune-oeuf); outline-offset: 2px; }
 input:focus, select:focus { border-color: var(--marque); }
 .nombre { display: flex; align-items: center; gap: 8px; }
@@ -301,3 +301,12 @@ fieldset.carte legend { font-weight: 700; padding: 0 6px; }
 
 .entete-ferme .outils .outil-bouton { background: none; border: 0; color: inherit; font-size: 20px; line-height: 1; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
 .entete-ferme .outils .outil-bouton:hover { background: rgba(255,255,255,.18); }
+
+/* Comptes : mots de passe et codes */
+.mdp { display: flex; align-items: center; gap: 8px; }
+.mdp input { flex: 1; min-width: 0; }
+.mdp .lien { white-space: nowrap; }
+.gros-mdp { font-size: 26px; font-weight: 800; letter-spacing: .06em; text-align: center; margin: 8px 0 12px; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; user-select: all; }
+.codes-secours { padding-left: 28px; margin: 12px 0; }
+.codes-secours li { margin: 6px 0; }
+.codes-secours code { font-size: 19px; font-weight: 700; letter-spacing: .06em; white-space: nowrap; }

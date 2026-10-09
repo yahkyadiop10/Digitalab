@@ -39,15 +39,24 @@ try {
   await app.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
   await app.getByText('Exemple chargé').waitFor();
 
-  etape('3 « Gestion des utilisateurs » est visible dans les réglages');
+  etape('3 « Gestion des utilisateurs » est visible ; première connexion : création de l’administrateur');
   await app.getByRole('link', { name: /Gestion des utilisateurs/ }).click();
   await app.getByRole('link', { name: 'Créer ou relier un compte' }).click();
   await app.getByText('Démonstration').first().waitFor();
-  await app.getByLabel('Votre numéro de téléphone').fill('77 000 00 01');
-  await app.getByRole('button', { name: 'Recevoir un code' }).click();
-  await app.getByText(/Mode démonstration/).waitFor();
-  await app.getByLabel('Code reçu').fill('123456');
-  await app.getByRole('button', { name: 'Valider' }).click();
+  // Premier lancement : aucun compte par défaut, c'est le propriétaire qui crée son administrateur.
+  await app.getByRole('heading', { name: 'Créer l’administrateur' }).waitFor();
+  await app.getByLabel('Votre nom').fill('Aminata Sow');
+  await app.getByLabel('Mot de passe', { exact: true }).fill('court');
+  await app.getByLabel('Confirmez le mot de passe').fill('court');
+  await app.getByRole('button', { name: 'Créer l’administrateur' }).click();
+  await app.getByText(/au moins 8 caractères/).waitFor();
+  await app.getByLabel('Mot de passe', { exact: true }).fill('Poule-Pondeuse-7');
+  await app.getByLabel('Confirmez le mot de passe').fill('Poule-Pondeuse-7');
+  await app.getByRole('button', { name: 'Créer l’administrateur' }).click();
+  await app.getByRole('heading', { name: 'Vos codes de secours' }).waitFor();
+  assert.equal(await app.locator('.codes-secours code').count(), 8);
+  await app.getByLabel('J’ai noté mes codes de secours en lieu sûr').check();
+  await app.getByRole('button', { name: 'Entrer dans l’application' }).click();
   // Une personne connectée choisit d'abord son code de verrouillage.
   await app.getByRole('heading', { name: 'Choisissez votre code' }).waitFor();
   await app.getByLabel('Votre code (4 à 6 chiffres)').fill('1234');
@@ -60,19 +69,21 @@ try {
   await app.getByRole('button', { name: 'Enregistrer mon code' }).click();
   await app.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
 
-  etape('4 ajout d’un utilisateur avec ses droits et son code');
+  etape('4 ajout d’un utilisateur : identifiant nom.prénom et mot de passe provisoire');
   await app.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
   await app.getByRole('link', { name: /Gestion des utilisateurs/ }).click();
   await app.getByRole('link', { name: '+ Ajouter un utilisateur' }).click();
-  await app.getByLabel('Nom de la personne').fill('Moussa Ndiaye');
+  await app.getByLabel('Prénom').fill('Moussa');
+  await app.getByLabel('Nom', { exact: true }).fill('Ndiaye');
   await app.getByLabel('Fonction dans la ferme').fill('Responsable bâtiment A');
-  await app.getByLabel('Téléphone', { exact: true }).fill('77 111 22 33');
   await app.getByLabel('Profil de départ').selectOption({ label: 'Caissier' });
   await app.getByLabel('Tout cocher : Salaires').check();
-  await app.getByRole('button', { name: 'Ajouter et obtenir le code' }).click();
-  await app.getByRole('heading', { name: 'Code de connexion' }).waitFor();
-  const codeMoussa = (await app.locator('.gros-code').innerText()).trim();
-  assert.match(codeMoussa, /^\d{6}$/);
+  await app.getByRole('button', { name: 'Ajouter et obtenir le mot de passe provisoire' }).click();
+  await app.getByRole('heading', { name: 'Compte créé' }).waitFor();
+  const identifiantMoussa = (await app.locator('.carte .ligne b').first().innerText()).trim();
+  const provisoireMoussa = (await app.locator('.gros-mdp').innerText()).trim();
+  assert.equal(identifiantMoussa, 'ndiaye.moussa');
+  assert.match(provisoireMoussa, /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
   await app.getByRole('link', { name: 'Terminé' }).click();
   await app.getByText('Moussa Ndiaye').waitFor();
   assert.match(await app.locator('body').innerText(), /Responsable bâtiment A/);
@@ -115,10 +126,9 @@ try {
   await app.getByText('Vous avez été déconnecté').waitFor();
   if (process.env.CAPTURES) await page.screenshot({ path: `${process.env.CAPTURES}/v2.png` });
   assert.doesNotMatch(await app.locator('body').innerText(), /Réglages|Tableau de bord/);
-  await app.getByLabel('Votre numéro de téléphone').fill('77 000 00 01');
-  await app.getByRole('button', { name: 'Recevoir un code' }).click();
-  await app.getByLabel('Code reçu').fill('123456');
-  await app.getByRole('button', { name: 'Valider' }).click();
+  await app.getByLabel('Identifiant', { exact: true }).fill('admin');
+  await app.getByLabel('Mot de passe', { exact: true }).fill('Poule-Pondeuse-7');
+  await app.getByRole('button', { name: 'Se connecter' }).click();
   // Même personne, même appareil : ses données et son code sont toujours là.
   await app.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   assert.doesNotMatch(await app.locator('body').innerText(), /Choisissez votre code/);
@@ -129,10 +139,14 @@ try {
   await app.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
   await app.getByRole('heading', { name: 'Connexion' }).waitFor();
   assert.equal(await app.getByText('Vous avez été déconnecté').count(), 0);
-  await app.getByLabel('Votre numéro de téléphone').fill('77 111 22 33');
-  await app.getByRole('button', { name: 'J’ai déjà un code donné par mon administrateur' }).click();
-  await app.getByLabel('Code reçu').fill(codeMoussa);
-  await app.getByRole('button', { name: 'Valider' }).click();
+  await app.getByLabel('Identifiant', { exact: true }).fill(identifiantMoussa);
+  await app.getByLabel('Mot de passe', { exact: true }).fill(provisoireMoussa);
+  await app.getByRole('button', { name: 'Se connecter' }).click();
+  // Mot de passe provisoire : il faut en choisir un à soi avant d'entrer.
+  await app.getByRole('heading', { name: 'Choisissez votre mot de passe' }).waitFor();
+  await app.getByLabel('Nouveau mot de passe', { exact: true }).fill('Mon-Propre-Mot-De-Passe-9');
+  await app.getByLabel('Confirmez le nouveau mot de passe').fill('Mon-Propre-Mot-De-Passe-9');
+  await app.getByRole('button', { name: 'Enregistrer et continuer' }).click();
   await app.getByText(/Cet appareil contient les données de/).waitFor();
   await app.getByRole('button', { name: 'Effacer cet appareil et continuer' }).click();
   // Les données de la personne précédente ont disparu, et son code aussi : la nouvelle personne choisit le sien.

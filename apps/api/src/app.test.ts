@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ChangementSync, EntreeJournal, ReponseSync } from '@digitalab/core';
-import { creerBanc, seConnecter, URL_BASE_TEST, type Banc, type Session } from './test-utils.js';
+import { creerBanc, creerProprietaire, inviter as inviterBanc, seConnecter, MOT_DE_PASSE_TEST, URL_BASE_TEST, type Banc, type Session } from './test-utils.js';
 import { lireConfig } from './config.js';
+import { hacherMotDePasse, verifierMotDePasse } from './securite.js';
 
 const MAINTENANT = 1_790_000_000_000;
 const enreg = (table: ChangementSync['table'], id: string, misAJour: number, extra: Record<string, unknown> = {}): ChangementSync => ({ table, enregistrement: { id, misAJour, ...extra } });
@@ -13,72 +14,139 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
 
   const post = (url: string, payload: unknown, s?: Session) => banc.app.inject({ method: 'POST', url, payload: payload as object, ...(s ? { headers: s.entetes } : {}) });
   const get = (url: string, s?: Session) => banc.app.inject({ method: 'GET', url, ...(s ? { headers: s.entetes } : {}) });
+  const inviter = (patron: Session, corps: Record<string, unknown> & { telephone: string }) => inviterBanc(banc, patron, corps);
   const sync = async (s: Session, depuisSeq: number, changements: ChangementSync[] = [], org = s.organisationId) => post(`/v1/organisations/${org}/sync`, { depuisSeq, changements }, s);
 
-  describe('connexion par téléphone', () => {
-    it('refuse un numéro invalide', async () => {
-      const r = await post('/v1/auth/code', { telephone: '123' });
-      expect(r.statusCode).toBe(400);
-      expect(r.json().erreur).toMatch(/invalide/);
+  const org = (s: Session) => `/v1/organisations/${s.organisationId}`;
+  const membres = async (s: Session) => (await get(`${org(s)}/membres`, s)).json().membres as { identifiant: string; nom: string | null; telephone: string | null; role: string; fonction: string | null; droits: string[]; etat: string }[];
+  const connexion = (identifiant: string, motDePasse: string) => post('/v1/auth/connexion', { identifiant, motDePasse });
+
+  describe('installation : premier administrateur', () => {
+    it('crée l’administrateur, son élevage et des codes de secours, une seule fois', async () => {
+      const b = await creerBanc();
+      try {
+        expect((await b.app.inject({ method: 'GET', url: '/v1/installation' })).json()).toEqual({ aInitialiser: true, cleRequise: false });
+        const r = await b.app.inject({ method: 'POST', url: '/v1/installation', payload: { identifiant: 'Admin', motDePasse: 'Poule-Pondeuse-7', nom: 'Aminata Sow', nomElevage: 'Ferme Sow' } });
+        expect(r.statusCode).toBe(200);
+        const corps = r.json();
+        expect(corps.utilisateur).toMatchObject({ identifiant: 'admin', nom: 'Aminata Sow' });
+        expect(corps.organisations).toMatchObject([{ nom: 'Ferme Sow', role: 'proprietaire' }]);
+        expect(corps.codesSecours).toHaveLength(8);
+        expect(corps.codesSecours[0]).toMatch(/^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
+        expect(corps.doitChanger).toBe(false);
+        expect((await b.app.inject({ method: 'GET', url: '/v1/installation' })).json().aInitialiser).toBe(false);
+        // La session reçue fonctionne tout de suite.
+        expect((await b.app.inject({ method: 'GET', url: '/v1/moi', headers: { authorization: `Bearer ${corps.jeton}` } })).statusCode).toBe(200);
+        // Une seconde installation est refusée : personne ne peut prendre la place de l'administrateur.
+        const encore = await b.app.inject({ method: 'POST', url: '/v1/installation', payload: { identifiant: 'pirate', motDePasse: 'Poule-Pondeuse-7' } });
+        expect(encore.statusCode).toBe(409);
+      } finally {
+        await b.fermer();
+      }
     });
 
-    it('crée le compte et un premier élevage dont on est propriétaire', async () => {
-      const s = await seConnecter(banc, '77 100 00 01');
-      expect(s.telephone).toBe('+221771000001');
-      const moi = (await get('/v1/moi', s)).json();
-      expect(moi.utilisateur.telephone).toBe('+221771000001');
-      expect(moi.organisations).toMatchObject([{ nom: 'Mon élevage', role: 'proprietaire' }]);
+    it('n’a aucun identifiant ni mot de passe par défaut', async () => {
+      const b = await creerBanc();
+      try {
+        expect((await b.app.inject({ method: 'POST', url: '/v1/auth/connexion', payload: { identifiant: 'admin', motDePasse: 'admin 1234' } })).statusCode).toBe(401);
+        expect((await b.pool.query('SELECT count(*) AS n FROM utilisateurs')).rows[0].n).toBe('0');
+      } finally {
+        await b.fermer();
+      }
     });
 
-    it('retrouve le même compte et le même élevage à la connexion suivante', async () => {
-      const a = await seConnecter(banc, '77 100 00 02');
-      const b = await seConnecter(banc, '+221771000002');
-      expect(b.organisationId).toBe(a.organisationId);
-      expect(b.jeton).not.toBe(a.jeton);
+    it('refuse un identifiant ou un mot de passe trop faible', async () => {
+      const b = await creerBanc();
+      try {
+        const essai = (identifiant: string, motDePasse: string) => b.app.inject({ method: 'POST', url: '/v1/installation', payload: { identifiant, motDePasse } });
+        expect((await essai('ab', 'Poule-Pondeuse-7')).statusCode).toBe(400);
+        expect((await essai('admin', 'court')).json().erreur).toMatch(/8 caractères/);
+        expect((await essai('admin', 'admin 1234')).json().erreur).toMatch(/identifiant/);
+        expect((await essai('admin', '12345678')).json().erreur).toMatch(/courant/);
+        expect((await b.app.inject({ method: 'GET', url: '/v1/installation' })).json().aInitialiser).toBe(true);
+      } finally {
+        await b.fermer();
+      }
     });
 
-    it('ne stocke ni le code ni le jeton en clair', async () => {
-      const s = await seConnecter(banc, '77 100 00 03');
-      const sessions = (await banc.pool.query('SELECT jeton_hash FROM sessions')).rows.map((r) => r.jeton_hash);
-      expect(sessions).not.toContain(s.jeton);
-      await post('/v1/auth/code', { telephone: '77 100 00 03' });
-      const code = banc.codes.get('+221771000003')!;
-      const stocke = (await banc.pool.query('SELECT code_hash FROM codes_connexion WHERE telephone = $1', ['+221771000003'])).rows[0].code_hash;
-      expect(stocke).not.toBe(code);
-      expect(stocke).toHaveLength(64);
+    it('exige la clé d’installation affichée dans la console du serveur, et bloque les essais répétés', async () => {
+      const b = await creerBanc({ cleInstallation: 'k7mq-x9pt' });
+      try {
+        expect((await b.app.inject({ method: 'GET', url: '/v1/installation' })).json()).toEqual({ aInitialiser: true, cleRequise: true });
+        const essai = (cle?: string) => b.app.inject({ method: 'POST', url: '/v1/installation', payload: { identifiant: 'admin', motDePasse: 'Poule-Pondeuse-7', ...(cle ? { cle } : {}) } });
+        expect((await essai()).statusCode).toBe(403);
+        for (let i = 0; i < 3; i++) expect((await essai('mauvaise-cle')).statusCode).toBe(403);
+        // Cinquième échec : la porte se ferme quelques minutes, même pour la bonne clé.
+        expect((await essai('mauvaise-cle')).statusCode).toBe(403);
+        expect((await essai('k7mq-x9pt')).statusCode).toBe(429);
+        b.horloge.maintenant = new Date(b.horloge.maintenant.getTime() + 16 * 60_000);
+        // Casse, espaces et tirets sont ignorés.
+        expect((await essai(' K7MQ X9PT ')).statusCode).toBe(200);
+      } finally {
+        await b.fermer();
+      }
+    });
+  });
+
+  describe('connexion par identifiant et mot de passe', () => {
+    it('connecte avec le bon mot de passe (identifiant insensible à la casse)', async () => {
+      await creerProprietaire(banc, 'sow.aminata');
+      const r = await connexion('  Sow.Aminata ', MOT_DE_PASSE_TEST);
+      expect(r.statusCode).toBe(200);
+      expect(r.json()).toMatchObject({ doitChanger: false, utilisateur: { identifiant: 'sow.aminata' }, organisations: [{ role: 'proprietaire' }] });
+      const moi = (await get('/v1/moi', { entetes: { authorization: `Bearer ${r.json().jeton}` } } as Session)).json();
+      expect(moi.utilisateur.identifiant).toBe('sow.aminata');
     });
 
-    it('limite les demandes de code à une par minute', async () => {
-      expect((await post('/v1/auth/code', { telephone: '77 100 00 04' })).statusCode).toBe(200);
-      const r = await post('/v1/auth/code', { telephone: '77 100 00 04' });
+    it('dit la même chose pour un mauvais mot de passe et un identifiant inconnu', async () => {
+      await creerProprietaire(banc, 'fall.awa');
+      const faux = await connexion('fall.awa', 'Mauvais-mot-de-passe-1');
+      const inconnu = await connexion('personne.inconnue', 'Mauvais-mot-de-passe-1');
+      expect(faux.statusCode).toBe(401);
+      expect(inconnu.statusCode).toBe(401);
+      expect(faux.json()).toEqual(inconnu.json());
+      expect(faux.json().erreur).toBe('Identifiant ou mot de passe incorrect.');
+    });
+
+    it('bloque l’identifiant après 5 échecs, même avec le bon mot de passe, puis le libère au bout de 15 minutes', async () => {
+      await creerProprietaire(banc, 'diop.ibou');
+      for (let i = 0; i < 5; i++) expect((await connexion('diop.ibou', 'Mauvais-mot-de-passe-1')).statusCode).toBe(401);
+      const bloque = await connexion('diop.ibou', MOT_DE_PASSE_TEST);
+      expect(bloque.statusCode).toBe(429);
+      expect(bloque.json().erreur).toMatch(/Réessayez dans 15 minutes/);
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 16 * 60_000);
+      expect((await connexion('diop.ibou', MOT_DE_PASSE_TEST)).statusCode).toBe(200);
+    });
+
+    it('bloque de la même façon un identifiant qui n’existe pas (rien ne révèle les comptes)', async () => {
+      for (let i = 0; i < 5; i++) await connexion('fantome.fantome', 'Mauvais-mot-de-passe-1');
+      const r = await connexion('fantome.fantome', 'Mauvais-mot-de-passe-1');
       expect(r.statusCode).toBe(429);
-      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 61_000);
-      expect((await post('/v1/auth/code', { telephone: '77 100 00 04' })).statusCode).toBe(200);
+      expect(r.json().erreur).toMatch(/Trop d’essais/);
     });
 
-    it('refuse un mauvais code, bloque après 5 essais, même avec le bon code', async () => {
-      await post('/v1/auth/code', { telephone: '77 100 00 05' });
-      const bon = banc.codes.get('+221771000005')!;
-      const faux = bon === '000000' ? '111111' : '000000';
-      for (let i = 0; i < 5; i++) expect((await post('/v1/auth/connexion', { telephone: '77 100 00 05', code: faux })).statusCode).toBe(400);
-      const r = await post('/v1/auth/connexion', { telephone: '77 100 00 05', code: bon });
-      expect(r.statusCode).toBe(429);
+    it('un succès remet le compteur d’échecs à zéro', async () => {
+      await creerProprietaire(banc, 'ba.mamadou');
+      for (let i = 0; i < 4; i++) await connexion('ba.mamadou', 'Mauvais-mot-de-passe-1');
+      expect((await connexion('ba.mamadou', MOT_DE_PASSE_TEST)).statusCode).toBe(200);
+      for (let i = 0; i < 4; i++) expect((await connexion('ba.mamadou', 'Mauvais-mot-de-passe-1')).statusCode).toBe(401);
+      expect((await connexion('ba.mamadou', MOT_DE_PASSE_TEST)).statusCode).toBe(200);
     });
 
-    it('refuse un code expiré', async () => {
-      await post('/v1/auth/code', { telephone: '77 100 00 06' });
-      const code = banc.codes.get('+221771000006')!;
-      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 11 * 60_000);
-      const r = await post('/v1/auth/connexion', { telephone: '77 100 00 06', code });
-      expect(r.statusCode).toBe(400);
-      expect(r.json().erreur).toMatch(/expiré/);
-    });
-
-    it('un code ne sert qu’une fois', async () => {
-      await post('/v1/auth/code', { telephone: '77 100 00 07' });
-      const code = banc.codes.get('+221771000007')!;
-      expect((await post('/v1/auth/connexion', { telephone: '77 100 00 07', code })).statusCode).toBe(200);
-      expect((await post('/v1/auth/connexion', { telephone: '77 100 00 07', code })).statusCode).toBe(400);
+    it('ne garde ni le mot de passe ni le jeton en clair, mais une empreinte scrypt salée', async () => {
+      await creerProprietaire(banc, 'sy.fatou');
+      const r = (await connexion('sy.fatou', MOT_DE_PASSE_TEST)).json();
+      const sessions = (await banc.pool.query('SELECT jeton_hash FROM sessions')).rows.map((x) => x.jeton_hash);
+      expect(sessions).not.toContain(r.jeton);
+      const hash = (await banc.pool.query('SELECT mot_de_passe_hash AS h FROM utilisateurs WHERE identifiant = $1', ['sy.fatou'])).rows[0].h as string;
+      expect(hash).toMatch(/^scrypt\$\d+\$\d+\$\d+\$/);
+      expect(hash).not.toContain(MOT_DE_PASSE_TEST);
+      // Même mot de passe, deux empreintes différentes (sel aléatoire).
+      const a = await hacherMotDePasse('Poule-Pondeuse-7', { N: 1024, r: 8, p: 1 });
+      const b = await hacherMotDePasse('Poule-Pondeuse-7', { N: 1024, r: 8, p: 1 });
+      expect(a).not.toBe(b);
+      expect(await verifierMotDePasse('Poule-Pondeuse-7', a)).toBe(true);
+      expect(await verifierMotDePasse('Poule-Pondeuse-8', a)).toBe(false);
     });
 
     it('exige une session valide, et la déconnexion l’invalide', async () => {
@@ -96,58 +164,308 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
     });
   });
 
-  describe('élevage, invitations et rôles', () => {
-    it('le propriétaire invite une personne, qui trouve l’élevage à sa première connexion', async () => {
+  describe('mots de passe provisoires et changement de mot de passe', () => {
+    async function nouvelleRecrue(etiquette: string, corps: Record<string, unknown> = {}) {
+      const patron = await seConnecter(banc, `${etiquette} patron`);
+      const r = await post(`${org(patron)}/membres`, { prenom: 'Moussa', nom: 'Ndiaye', role: 'soigneur', ...corps }, patron);
+      return { patron, r, corps: r.json() };
+    }
+
+    it('crée l’identifiant nom.prénom et un mot de passe provisoire propre à la personne, montré une seule fois', async () => {
+      const { r, corps, patron } = await nouvelleRecrue('77 700 00 01');
+      expect(r.statusCode).toBe(200);
+      expect(corps).toMatchObject({ identifiant: 'ndiaye.moussa', nom: 'Moussa Ndiaye' });
+      expect(corps.motDePasseProvisoire).toMatch(/^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
+      expect(new Date(corps.expireLe).getTime()).toBe(banc.horloge.maintenant.getTime() + 5 * 86_400_000);
+      // La liste ne montre jamais de mot de passe.
+      const liste = await membres(patron);
+      expect(JSON.stringify(liste)).not.toContain(corps.motDePasseProvisoire);
+      expect(liste.find((m) => m.identifiant === 'ndiaye.moussa')).toMatchObject({ etat: 'provisoire', role: 'soigneur' });
+    });
+
+    it('donne un mot de passe différent à chaque personne', async () => {
+      const patron = await seConnecter(banc, '77 700 00 02');
+      const a = (await post(`${org(patron)}/membres`, { prenom: 'Awa', nom: 'Fall', role: 'lecteur' }, patron)).json();
+      const b = (await post(`${org(patron)}/membres`, { prenom: 'Ibrahima', nom: 'Fall', role: 'lecteur' }, patron)).json();
+      expect(a.motDePasseProvisoire).not.toBe(b.motDePasseProvisoire);
+    });
+
+    it('ajoute un numéro si l’identifiant est déjà pris, sans accents ni majuscules', async () => {
+      const patron = await seConnecter(banc, '77 700 00 03');
+      const ajouter = async (prenom: string, nom: string) => (await post(`${org(patron)}/membres`, { prenom, nom, role: 'lecteur' }, patron)).json().identifiant;
+      expect(await ajouter('Aïssatou', 'Thiam')).toBe('thiam.aissatou');
+      expect(await ajouter('Aissatou', 'THIAM')).toBe('thiam.aissatou2');
+      expect(await ajouter('aissatou', 'thiam')).toBe('thiam.aissatou3');
+    });
+
+    it('refuse un nom sans lettres et un téléphone invalide, accepte un téléphone facultatif', async () => {
+      const patron = await seConnecter(banc, '77 700 00 04');
+      expect((await post(`${org(patron)}/membres`, { prenom: '???', nom: '...', role: 'lecteur' }, patron)).statusCode).toBe(400);
+      expect((await post(`${org(patron)}/membres`, { prenom: 'A', nom: 'B', role: 'lecteur', telephone: '123' }, patron)).statusCode).toBe(400);
+      const sans = (await post(`${org(patron)}/membres`, { prenom: 'Sans', nom: 'Telephone', role: 'lecteur' }, patron)).json();
+      const avec = (await post(`${org(patron)}/membres`, { prenom: 'Avec', nom: 'Telephone', role: 'lecteur', telephone: '77 123 45 67' }, patron)).json();
+      const liste = await membres(patron);
+      expect(liste.find((m) => m.identifiant === sans.identifiant)!.telephone).toBeNull();
+      expect(liste.find((m) => m.identifiant === avec.identifiant)!.telephone).toBe('+221771234567');
+    });
+
+    it('le mot de passe provisoire ouvre une session limitée : tout est refusé tant qu’il n’est pas remplacé', async () => {
+      const { corps, patron } = await nouvelleRecrue('77 700 00 05');
+      const r = (await connexion(corps.identifiant, corps.motDePasseProvisoire)).json();
+      expect(r.doitChanger).toBe(true);
+      const s = { entetes: { authorization: `Bearer ${r.jeton}` } } as Session;
+      const bloque = await get(`/v1/organisations/${r.organisations[0].id}/membres`, s);
+      expect(bloque.statusCode).toBe(403);
+      expect(bloque.json().code).toBe('changement_requis');
+      expect((await sync({ ...s, organisationId: patron.organisationId }, 0)).statusCode).toBe(403);
+      // Elle peut seulement voir son compte, se déconnecter et choisir son mot de passe.
+      expect((await get('/v1/moi', s)).json().utilisateur.doitChanger).toBe(true);
+      expect((await post('/v1/auth/deconnexion', {}, s)).statusCode).toBe(200);
+    });
+
+    it('tolère les majuscules ajoutées par le clavier du téléphone sur un mot de passe provisoire', async () => {
+      const { corps } = await nouvelleRecrue('77 700 00 06');
+      expect((await connexion(corps.identifiant, ` ${corps.motDePasseProvisoire.toUpperCase()} `)).statusCode).toBe(200);
+    });
+
+    it('refuse un mot de passe provisoire expiré après 5 jours', async () => {
+      const { corps } = await nouvelleRecrue('77 700 00 07');
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 5 * 86_400_000 + 1000);
+      const r = await connexion(corps.identifiant, corps.motDePasseProvisoire);
+      expect(r.statusCode).toBe(403);
+      expect(r.json().code).toBe('provisoire_expire');
+      const patron = await seConnecter(banc, '77 700 00 07 patron');
+      expect((await membres(patron)).find((m) => m.identifiant === corps.identifiant)!.etat).toBe('expire');
+    });
+
+    it('le changement de mot de passe lève le blocage, vérifie l’ancien et applique la règle des mots de passe', async () => {
+      const { corps } = await nouvelleRecrue('77 700 00 08');
+      const jeton = (await connexion(corps.identifiant, corps.motDePasseProvisoire)).json().jeton;
+      const s = { entetes: { authorization: `Bearer ${jeton}` } } as Session;
+      const changer = (ancien: string, nouveau: string) => post('/v1/moi/mot-de-passe', { ancien, nouveau }, s);
+      expect((await changer('Mauvais-ancien-1', 'Nouveau-Mot-De-Passe-3')).statusCode).toBe(400);
+      expect((await changer(corps.motDePasseProvisoire, 'court')).json().erreur).toMatch(/8 caractères/);
+      expect((await changer(corps.motDePasseProvisoire, corps.motDePasseProvisoire)).json().erreur).toMatch(/différent/);
+      expect((await changer(corps.motDePasseProvisoire, `${corps.identifiant}!!`)).json().erreur).toMatch(/identifiant/);
+      expect((await changer(corps.motDePasseProvisoire, 'Nouveau-Mot-De-Passe-3')).statusCode).toBe(200);
+      // L'ancien mot de passe ne marche plus, le nouveau oui, et plus rien n'est limité.
+      expect((await connexion(corps.identifiant, corps.motDePasseProvisoire)).statusCode).toBe(401);
+      const apres = await connexion(corps.identifiant, 'Nouveau-Mot-De-Passe-3');
+      expect(apres.statusCode).toBe(200);
+      expect(apres.json().doitChanger).toBe(false);
+      expect((await get('/v1/moi', s)).json().utilisateur.doitChanger).toBe(false);
+    });
+
+    it('changer son mot de passe déconnecte les autres appareils, pas celui qui change', async () => {
+      const a = await seConnecter(banc, '77 700 00 09');
+      const b = await seConnecter(banc, '77 700 00 09');
+      const r = await post('/v1/moi/mot-de-passe', { ancien: MOT_DE_PASSE_TEST, nouveau: 'Un-Autre-Mot-De-Passe-4' }, a);
+      expect(r.statusCode).toBe(200);
+      expect((await get('/v1/moi', a)).statusCode).toBe(200);
+      expect((await get('/v1/moi', b)).statusCode).toBe(401);
+    });
+
+    it('note le changement dans le journal sans jamais écrire le mot de passe', async () => {
+      const { corps, patron } = await nouvelleRecrue('77 700 00 10');
+      const jeton = (await connexion(corps.identifiant, corps.motDePasseProvisoire)).json().jeton;
+      await post('/v1/moi/mot-de-passe', { ancien: corps.motDePasseProvisoire, nouveau: 'Nouveau-Mot-De-Passe-3' }, { entetes: { authorization: `Bearer ${jeton}` } } as Session);
+      const entrees = ((await get(`${org(patron)}/journal`, patron)).json() as { entrees: EntreeJournal[] }).entrees;
+      expect(entrees.map((x) => x.description)).toContain('a choisi son mot de passe personnel');
+      expect(JSON.stringify(entrees)).not.toContain(corps.motDePasseProvisoire);
+      expect(JSON.stringify(entrees)).not.toContain('Nouveau-Mot-De-Passe-3');
+    });
+  });
+
+  describe('réinitialisation par l’administrateur', () => {
+    const reset = (patron: Session, identifiant: string) => post(`${org(patron)}/membres/${encodeURIComponent(identifiant)}/mot-de-passe`, {}, patron);
+
+    it('donne un nouveau mot de passe provisoire, déconnecte la personne et note l’action sans le mot de passe', async () => {
+      const patron = await seConnecter(banc, '77 710 00 01');
+      await inviter(patron, { telephone: '77 710 00 02', role: 'soigneur', nom: 'Awa Fall' });
+      const aide = await seConnecter(banc, '77 710 00 02');
+      const r = await reset(patron, aide.identifiant);
+      expect(r.statusCode).toBe(200);
+      const neuf = r.json();
+      expect(neuf.motDePasseProvisoire).toMatch(/^[a-z0-9]{4}-/);
+      expect((await get('/v1/moi', aide)).statusCode).toBe(401);
+      expect((await connexion(aide.identifiant, MOT_DE_PASSE_TEST)).statusCode).toBe(401);
+      const relance = (await connexion(aide.identifiant, neuf.motDePasseProvisoire)).json();
+      expect(relance.doitChanger).toBe(true);
+      const entrees = ((await get(`${org(patron)}/journal`, patron)).json() as { entrees: EntreeJournal[] }).entrees;
+      expect(entrees.some((x) => x.description === 'a réinitialisé le mot de passe de Awa Fall' && x.identifiant === patron.identifiant)).toBe(true);
+      expect(JSON.stringify(entrees)).not.toContain(neuf.motDePasseProvisoire);
+    });
+
+    it('débloque aussi un compte bloqué après trop d’essais', async () => {
+      const patron = await seConnecter(banc, '77 710 00 03');
+      await inviter(patron, { telephone: '77 710 00 04', role: 'lecteur' });
+      const aide = await seConnecter(banc, '77 710 00 04');
+      for (let i = 0; i < 5; i++) await connexion(aide.identifiant, 'Mauvais-mot-de-passe-1');
+      expect((await connexion(aide.identifiant, MOT_DE_PASSE_TEST)).statusCode).toBe(429);
+      const neuf = (await reset(patron, aide.identifiant)).json();
+      expect((await connexion(aide.identifiant, neuf.motDePasseProvisoire)).statusCode).toBe(200);
+    });
+
+    it('un provisoire expiré se remplace par une réinitialisation', async () => {
+      const patron = await seConnecter(banc, '77 710 00 05');
+      const cree = (await post(`${org(patron)}/membres`, { prenom: 'Lent', nom: 'Arrivé', role: 'lecteur' }, patron)).json();
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 6 * 86_400_000);
+      expect((await connexion(cree.identifiant, cree.motDePasseProvisoire)).statusCode).toBe(403);
+      const neuf = (await reset(patron, cree.identifiant)).json();
+      expect((await connexion(cree.identifiant, neuf.motDePasseProvisoire)).statusCode).toBe(200);
+    });
+
+    it('réserve la réinitialisation aux administrateurs, jamais pour soi-même ni pour le propriétaire', async () => {
+      const patron = await seConnecter(banc, '77 710 00 06');
+      await inviter(patron, { telephone: '77 710 00 07', role: 'soigneur' });
+      await inviter(patron, { telephone: '77 710 00 08', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
+      await inviter(patron, { telephone: '77 710 00 09', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
+      const aide = await seConnecter(banc, '77 710 00 07');
+      const delegue = await seConnecter(banc, '77 710 00 08');
+      const autreDelegue = await seConnecter(banc, '77 710 00 09');
+      expect((await reset(aide, delegue.identifiant)).statusCode).toBe(403);
+      expect((await reset(delegue, aide.identifiant)).statusCode).toBe(200);
+      expect((await reset(delegue, delegue.identifiant)).statusCode).toBe(400);
+      expect((await reset(delegue, patron.identifiant)).statusCode).toBe(403);
+      // Un délégué ne prend pas la main sur un autre délégué : seul le propriétaire le peut.
+      expect((await reset(delegue, autreDelegue.identifiant)).statusCode).toBe(403);
+      expect((await reset(patron, autreDelegue.identifiant)).statusCode).toBe(200);
+      expect((await reset(patron, 'inconnu.inconnu')).statusCode).toBe(404);
+    });
+
+    it('ne réinitialise pas le mot de passe d’une personne d’un autre élevage', async () => {
+      const a = await seConnecter(banc, '77 710 00 10');
+      const b = await seConnecter(banc, '77 710 00 11');
+      expect((await reset(a, b.identifiant)).statusCode).toBe(404);
+      expect((await connexion(b.identifiant, MOT_DE_PASSE_TEST)).statusCode).toBe(200);
+    });
+  });
+
+  describe('codes de secours du propriétaire', () => {
+    async function installe() {
+      const b = await creerBanc();
+      const r = (await b.app.inject({ method: 'POST', url: '/v1/installation', payload: { identifiant: 'admin', motDePasse: 'Poule-Pondeuse-7' } })).json();
+      return { b, codes: r.codesSecours as string[], jeton: r.jeton as string };
+    }
+    const secours = (b: Banc, corps: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/v1/auth/secours', payload: corps });
+
+    it('un code de secours permet de choisir un nouveau mot de passe, une seule fois, et déconnecte les appareils', async () => {
+      const { b, codes, jeton } = await installe();
+      try {
+        const r = await secours(b, { identifiant: 'admin', code: codes[0]!.toUpperCase(), nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' });
+        expect(r.statusCode).toBe(200);
+        expect(r.json().codesRestants).toBe(7);
+        expect((await b.app.inject({ method: 'GET', url: '/v1/moi', headers: { authorization: `Bearer ${jeton}` } })).statusCode).toBe(401);
+        const ok = await b.app.inject({ method: 'POST', url: '/v1/auth/connexion', payload: { identifiant: 'admin', motDePasse: 'Mot-De-Passe-Retrouve-5' } });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json().doitChanger).toBe(false);
+        expect((await secours(b, { identifiant: 'admin', code: codes[0], nouveauMotDePasse: 'Encore-Un-Autre-Mot-6' })).statusCode).toBe(401);
+        expect((await secours(b, { identifiant: 'admin', code: codes[1], nouveauMotDePasse: 'Encore-Un-Autre-Mot-6' })).statusCode).toBe(200);
+      } finally {
+        await b.fermer();
+      }
+    });
+
+    it('refuse un mauvais code, bloque les essais et ne révèle pas si l’identifiant existe', async () => {
+      const { b, codes } = await installe();
+      try {
+        const faux = await secours(b, { identifiant: 'admin', code: 'aaaa-bbbb-cccc', nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' });
+        const inconnu = await secours(b, { identifiant: 'personne', code: codes[0], nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' });
+        expect(faux.statusCode).toBe(401);
+        expect(faux.json()).toEqual(inconnu.json());
+        for (let i = 0; i < 4; i++) await secours(b, { identifiant: 'admin', code: 'aaaa-bbbb-cccc', nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' });
+        expect((await secours(b, { identifiant: 'admin', code: codes[0], nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' })).statusCode).toBe(429);
+      } finally {
+        await b.fermer();
+      }
+    });
+
+    it('applique la règle des mots de passe sans consommer le code', async () => {
+      const { b, codes } = await installe();
+      try {
+        expect((await secours(b, { identifiant: 'admin', code: codes[0], nouveauMotDePasse: 'court' })).statusCode).toBe(400);
+        expect((await secours(b, { identifiant: 'admin', code: codes[0], nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' })).statusCode).toBe(200);
+      } finally {
+        await b.fermer();
+      }
+    });
+
+    it('ne garde que l’empreinte des codes, et on peut en générer de nouveaux (les anciens cessent de marcher)', async () => {
+      const { b, codes, jeton } = await installe();
+      try {
+        const stockes = (await b.pool.query('SELECT code_hash FROM codes_secours')).rows.map((x) => x.code_hash as string);
+        expect(stockes).toHaveLength(8);
+        for (const c of codes) expect(stockes).not.toContain(c);
+        const entetes = { authorization: `Bearer ${jeton}` };
+        expect((await b.app.inject({ method: 'POST', url: '/v1/moi/codes-secours', headers: entetes, payload: { motDePasse: 'Faux-mot-de-passe-1' } })).statusCode).toBe(400);
+        const r = await b.app.inject({ method: 'POST', url: '/v1/moi/codes-secours', headers: entetes, payload: { motDePasse: 'Poule-Pondeuse-7' } });
+        expect(r.statusCode).toBe(200);
+        expect(r.json().codesSecours).toHaveLength(8);
+        expect((await secours(b, { identifiant: 'admin', code: codes[0], nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' })).statusCode).toBe(401);
+        expect((await secours(b, { identifiant: 'admin', code: r.json().codesSecours[0], nouveauMotDePasse: 'Mot-De-Passe-Retrouve-5' })).statusCode).toBe(200);
+      } finally {
+        await b.fermer();
+      }
+    });
+
+    it('seul le propriétaire en a', async () => {
+      const patron = await seConnecter(banc, '77 720 00 01');
+      await inviter(patron, { telephone: '77 720 00 02', role: 'gerant' });
+      const gerant = await seConnecter(banc, '77 720 00 02');
+      expect((await post('/v1/moi/codes-secours', { motDePasse: MOT_DE_PASSE_TEST }, gerant)).statusCode).toBe(403);
+    });
+  });
+
+  describe('élevage, membres et rôles', () => {
+    it('le propriétaire ajoute une personne, qui trouve l’élevage à sa première connexion', async () => {
       const patron = await seConnecter(banc, '77 200 00 01');
-      const inv = await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 200 00 02', role: 'soigneur' }, patron);
+      const inv = await inviter(patron, { telephone: '77 200 00 02', role: 'soigneur' });
       expect(inv.statusCode).toBe(200);
-      let liste = (await get(`/v1/organisations/${patron.organisationId}/membres`, patron)).json().membres;
-      expect(liste).toMatchObject([{ telephone: '+221772000001', role: 'proprietaire', actif: true }, { telephone: '+221772000002', role: 'soigneur', actif: false }]);
+      let liste = await membres(patron);
+      expect(liste).toMatchObject([{ role: 'proprietaire', etat: 'actif' }, { role: 'soigneur', etat: 'provisoire' }]);
       const aide = await seConnecter(banc, '77 200 00 02');
       expect(aide.organisationId).toBe(patron.organisationId);
       const moi = (await get('/v1/moi', aide)).json();
       expect(moi.organisations).toHaveLength(1);
       expect(moi.organisations[0].role).toBe('soigneur');
-      liste = (await get(`/v1/organisations/${patron.organisationId}/membres`, patron)).json().membres;
-      expect(liste.find((m: { telephone: string }) => m.telephone === '+221772000002').actif).toBe(true);
+      liste = await membres(patron);
+      expect(liste.find((m) => m.identifiant === aide.identifiant)!.etat).toBe('actif');
     });
 
-    it('invite quelqu’un qui a déjà un compte, qui garde son propre élevage en plus', async () => {
-      const patron = await seConnecter(banc, '77 200 00 03');
-      const autre = await seConnecter(banc, '77 200 00 04');
-      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 200 00 04', role: 'veterinaire' }, patron);
-      const moi = (await get('/v1/moi', autre)).json();
-      expect(moi.organisations.map((o: { role: string }) => o.role).sort()).toEqual(['proprietaire', 'veterinaire']);
-    });
-
-    it('seul le propriétaire invite, retire ou renomme', async () => {
+    it('seul le propriétaire (ou un administrateur délégué) ajoute, retire ou renomme', async () => {
       const patron = await seConnecter(banc, '77 200 00 05');
-      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 200 00 06', role: 'soigneur' }, patron);
+      await inviter(patron, { telephone: '77 200 00 06', role: 'soigneur' });
       const aide = await seConnecter(banc, '77 200 00 06');
-      const org = patron.organisationId;
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 200 00 07', role: 'lecteur' }, aide)).statusCode).toBe(403);
-      expect((await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${org}/membres/${encodeURIComponent('+221772000005')}`, headers: aide.entetes })).statusCode).toBe(403);
-      expect((await banc.app.inject({ method: 'PATCH', url: `/v1/organisations/${org}`, payload: { nom: 'Pris' }, headers: aide.entetes })).statusCode).toBe(403);
-      expect((await banc.app.inject({ method: 'PATCH', url: `/v1/organisations/${org}`, payload: { nom: 'Ferme Sow' }, headers: patron.entetes })).statusCode).toBe(200);
+      const o = patron.organisationId;
+      expect((await post(`/v1/organisations/${o}/membres`, { prenom: 'X', nom: 'Y', role: 'lecteur' }, aide)).statusCode).toBe(403);
+      expect((await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${o}/membres/${encodeURIComponent(patron.identifiant)}`, headers: aide.entetes })).statusCode).toBe(403);
+      expect((await banc.app.inject({ method: 'PATCH', url: `/v1/organisations/${o}`, payload: { nom: 'Pris' }, headers: aide.entetes })).statusCode).toBe(403);
+      expect((await banc.app.inject({ method: 'PATCH', url: `/v1/organisations/${o}`, payload: { nom: 'Ferme Sow' }, headers: patron.entetes })).statusCode).toBe(200);
       expect((await get('/v1/moi', patron)).json().organisations[0].nom).toBe('Ferme Sow');
     });
 
-    it('ne laisse pas inviter avec le rôle propriétaire ni retirer le propriétaire', async () => {
+    it('ne laisse pas créer un propriétaire, ni retirer ou modifier le propriétaire, ni modifier ses propres droits', async () => {
       const patron = await seConnecter(banc, '77 200 00 08');
-      const org = patron.organisationId;
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 200 00 09', role: 'proprietaire' }, patron)).statusCode).toBe(400);
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 200 00 08', role: 'lecteur' }, patron)).statusCode).toBe(400);
-      expect((await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${org}/membres/${encodeURIComponent('+221772000008')}`, headers: patron.entetes })).statusCode).toBe(400);
+      const o = patron.organisationId;
+      expect((await post(`/v1/organisations/${o}/membres`, { prenom: 'X', nom: 'Y', role: 'proprietaire' }, patron)).statusCode).toBe(400);
+      expect((await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${o}/membres/${encodeURIComponent(patron.identifiant)}`, headers: patron.entetes })).statusCode).toBe(400);
+      expect((await banc.app.inject({ method: 'PATCH', url: `/v1/organisations/${o}/membres/${encodeURIComponent(patron.identifiant)}`, payload: { role: 'lecteur' }, headers: patron.entetes })).statusCode).toBe(400);
+      await inviter(patron, { telephone: '77 200 00 09', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
+      const delegue = await seConnecter(banc, '77 200 00 09');
+      const sien = await banc.app.inject({ method: 'PATCH', url: `/v1/organisations/${o}/membres/${encodeURIComponent(delegue.identifiant)}`, payload: { role: 'gerant' }, headers: delegue.entetes });
+      expect(sien.statusCode).toBe(400);
     });
 
-    it('retire une personne : elle perd l’accès', async () => {
+    it('retire une personne : elle perd l’accès, son compte disparaît et son identifiant redevient libre', async () => {
       const patron = await seConnecter(banc, '77 200 00 10');
-      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 200 00 11', role: 'soigneur' }, patron);
+      await inviter(patron, { telephone: '77 200 00 11', role: 'soigneur' });
       const aide = await seConnecter(banc, '77 200 00 11');
       expect((await sync(aide, 0, [], patron.organisationId)).statusCode).toBe(200);
-      const r = await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent('+221772000011')}`, headers: patron.entetes });
+      const r = await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent(aide.identifiant)}`, headers: patron.entetes });
       expect(r.statusCode).toBe(200);
-      expect((await sync(aide, 0, [], patron.organisationId)).statusCode).toBe(404);
+      expect((await sync(aide, 0, [], patron.organisationId)).statusCode).toBe(401);
+      expect((await connexion(aide.identifiant, MOT_DE_PASSE_TEST)).statusCode).toBe(401);
+      expect((await banc.pool.query('SELECT 1 FROM utilisateurs WHERE identifiant = $1', [aide.identifiant])).rowCount).toBe(0);
     });
 
     it('cloisonne les élevages entre eux', async () => {
@@ -157,6 +475,15 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect((await sync(b, 0, [], a.organisationId)).statusCode).toBe(404);
       expect((await get(`/v1/organisations/${a.organisationId}/membres`, b)).statusCode).toBe(404);
       expect((await sync(b, 0)).json().changements).toEqual([]);
+    });
+
+    it('le téléphone est une simple information de contact, modifiable par la personne', async () => {
+      const patron = await seConnecter(banc, '77 200 00 14');
+      expect((await banc.app.inject({ method: 'PATCH', url: '/v1/moi', headers: patron.entetes, payload: { telephone: '77 111 22 33', nom: 'Aminata Sow' } })).statusCode).toBe(200);
+      expect((await get('/v1/moi', patron)).json().utilisateur).toMatchObject({ telephone: '+221771112233', nom: 'Aminata Sow' });
+      expect((await banc.app.inject({ method: 'PATCH', url: '/v1/moi', headers: patron.entetes, payload: { telephone: '12' } })).statusCode).toBe(400);
+      expect((await banc.app.inject({ method: 'PATCH', url: '/v1/moi', headers: patron.entetes, payload: { telephone: '' } })).statusCode).toBe(200);
+      expect((await get('/v1/moi', patron)).json().utilisateur.telephone).toBeNull();
     });
   });
 
@@ -247,12 +574,12 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
     it('le lecteur est refusé s’il envoie des modifications, mais peut lire ; le vétérinaire ne peut écrire que dans la santé', async () => {
       const patron = await seConnecter(banc, '77 300 00 08');
       await sync(patron, 0, [enreg('lots', 'l1', MAINTENANT, { nom: 'Soie' })]);
-      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 300 00 10', role: 'lecteur' }, patron);
+      await inviter(patron, { telephone: '77 300 00 10', role: 'lecteur' });
       const lecteur = await seConnecter(banc, '77 300 00 10');
       expect(((await sync(lecteur, 0, [], patron.organisationId)).json() as ReponseSync).changements).toHaveLength(1);
       expect((await sync(lecteur, 0, [enreg('lots', 'l2', MAINTENANT)], patron.organisationId)).statusCode).toBe(403);
 
-      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 300 00 09', role: 'veterinaire' }, patron);
+      await inviter(patron, { telephone: '77 300 00 09', role: 'veterinaire' });
       const veto = await seConnecter(banc, '77 300 00 09');
       const r: ReponseSync = (await sync(veto, 0, [enreg('lots', 'l3', MAINTENANT), enreg('evenementsSante', 's1', MAINTENANT, { lotId: 'l1' })], patron.organisationId)).json();
       expect(r.refuses).toBe(1);
@@ -263,7 +590,7 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
 
     it('laisse un soigneur écrire', async () => {
       const patron = await seConnecter(banc, '77 300 00 11');
-      await post(`/v1/organisations/${patron.organisationId}/membres`, { telephone: '77 300 00 12', role: 'soigneur' }, patron);
+      await inviter(patron, { telephone: '77 300 00 12', role: 'soigneur' });
       const aide = await seConnecter(banc, '77 300 00 12');
       expect((await sync(aide, 0, [enreg('pontes', 'p1', MAINTENANT, { nombre: 5 })], patron.organisationId)).statusCode).toBe(200);
       expect((await sync(patron, 0)).json().changements).toHaveLength(1);
@@ -305,31 +632,16 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
     expect((await get('/v1/sante')).json()).toEqual({ ok: true });
   });
 
-  describe('droits fins, invitations et validation', () => {
-    const inviter = (patron: Session, corps: Record<string, unknown>) => post(`/v1/organisations/${patron.organisationId}/membres`, corps, patron);
+  describe('droits fins et validation', () => {
 
-    it('renvoie un code d’invitation à usage unique, qui permet de se connecter sans SMS', async () => {
+    it('enregistre la fonction et le profil à la création, et les montre dans la liste', async () => {
       const patron = await seConnecter(banc, '77 400 00 01');
-      const inv = (await inviter(patron, { telephone: '77 400 00 02', role: 'soigneur', fonction: 'Responsable bâtiment A', nom: 'Moussa' })).json();
-      expect(inv.codeInvitation).toMatch(/^\d{6}$/);
-      const liste = (await get(`/v1/organisations/${patron.organisationId}/membres`, patron)).json().membres;
-      expect(liste.find((m: { telephone: string }) => m.telephone === '+221774000002')).toMatchObject({ nom: 'Moussa', fonction: 'Responsable bâtiment A', invitationEnCours: true, actif: false });
-
-      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 02', code: '000000' })).statusCode).toBe(400);
-      const ok = await post('/v1/auth/connexion', { telephone: '77 400 00 02', code: inv.codeInvitation });
+      const inv = (await inviter(patron, { telephone: '77 400 00 02', role: 'soigneur', fonction: 'Responsable bâtiment A', nom: 'Cheikh Mbaye' })).json();
+      expect(inv.identifiant).toBe('mbaye.cheikh');
+      expect((await membres(patron)).find((m) => m.identifiant === inv.identifiant)).toMatchObject({ nom: 'Cheikh Mbaye', fonction: 'Responsable bâtiment A', etat: 'provisoire' });
+      const ok = await connexion(inv.identifiant, inv.motDePasseProvisoire);
       expect(ok.statusCode).toBe(200);
       expect(ok.json().organisations[0]).toMatchObject({ id: patron.organisationId, role: 'soigneur', fonction: 'Responsable bâtiment A' });
-      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 02', code: inv.codeInvitation })).statusCode).toBe(400);
-    });
-
-    it('bloque les essais répétés et refuse une invitation périmée', async () => {
-      const patron = await seConnecter(banc, '77 400 00 03');
-      const inv = (await inviter(patron, { telephone: '77 400 00 04', role: 'lecteur' })).json();
-      for (let i = 0; i < 5; i++) expect((await post('/v1/auth/connexion', { telephone: '77 400 00 04', code: '111111' })).statusCode).toBe(400);
-      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 04', code: inv.codeInvitation })).statusCode).toBe(429);
-      const inv2 = (await inviter(patron, { telephone: '77 400 00 04', nouveauCode: true })).json();
-      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 8 * 86_400_000);
-      expect((await post('/v1/auth/connexion', { telephone: '77 400 00 04', code: inv2.codeInvitation })).statusCode).toBe(400);
     });
 
     it('un soigneur ne voit pas les finances ni les salaires, un caissier voit les ventes mais pas les dépenses', async () => {
@@ -456,14 +768,14 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       await inviter(patron, { telephone: '77 400 00 24', role: 'gerant' });
       const gerant = await seConnecter(banc, '77 400 00 24');
       const org = patron.organisationId;
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 25', role: 'lecteur' }, gerant)).statusCode).toBe(403);
+      expect((await inviter(gerant, { telephone: '77 400 00 25', role: 'lecteur' })).statusCode).toBe(403);
       expect((await get(`/v1/organisations/${org}/membres`, gerant)).statusCode).toBe(403);
 
       await inviter(patron, { telephone: '77 400 00 26', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
       const delegue = await seConnecter(banc, '77 400 00 26');
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 27', role: 'lecteur' }, delegue)).statusCode).toBe(200);
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 28', role: 'personnalise', droits: ['admin.utilisateurs'] }, delegue)).statusCode).toBe(403);
-      expect((await post(`/v1/organisations/${org}/membres`, { telephone: '77 400 00 24', role: 'lecteur' }, delegue)).statusCode).toBe(200);
+      expect((await inviter(delegue, { telephone: '77 400 00 27', role: 'lecteur' })).statusCode).toBe(200);
+      expect((await inviter(delegue, { telephone: '77 400 00 28', role: 'personnalise', droits: ['admin.utilisateurs'] })).statusCode).toBe(403);
+      expect((await inviter(delegue, { telephone: '77 400 00 24', role: 'lecteur' })).statusCode).toBe(200);
     });
 
     it('modifie les droits d’une personne, qui les voit à la synchronisation suivante', async () => {
@@ -478,12 +790,10 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect((await get('/v1/moi', aide)).json().organisations[0].droits).toContain('saisie.ponte');
     });
 
-    it('ne laisse pas modifier le propriétaire, et ignore les droits inconnus', async () => {
+    it('ignore les droits inconnus', async () => {
       const patron = await seConnecter(banc, '77 400 00 31');
-      expect((await inviter(patron, { telephone: '77 400 00 31', role: 'lecteur' })).statusCode).toBe(400);
-      await inviter(patron, { telephone: '77 400 00 32', role: 'personnalise', droits: ['saisie.ponte', 'n.importe.quoi'] });
-      const liste = (await get(`/v1/organisations/${patron.organisationId}/membres`, patron)).json().membres;
-      expect(liste.find((m: { telephone: string }) => m.telephone === '+221774000032').droits).toEqual(['saisie.ponte']);
+      const cree = (await inviter(patron, { telephone: '77 400 00 32', role: 'personnalise', droits: ['saisie.ponte', 'n.importe.quoi'] })).json();
+      expect((await membres(patron)).find((m) => m.identifiant === cree.identifiant)!.droits).toEqual(['saisie.ponte']);
     });
 
     it('déconnecte les appareils d’une personne', async () => {
@@ -491,15 +801,14 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       await inviter(patron, { telephone: '77 400 00 34', role: 'soigneur' });
       const aide = await seConnecter(banc, '77 400 00 34');
       expect((await get('/v1/moi', aide)).statusCode).toBe(200);
-      const r = await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent('+221774000034')}/deconnexion`, {}, patron);
+      const r = await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent(aide.identifiant)}/deconnexion`, {}, patron);
       expect(r.statusCode).toBe(200);
       expect((await get('/v1/moi', aide)).statusCode).toBe(401);
-      expect((await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent('+221774000033')}/deconnexion`, {}, patron)).statusCode).toBe(400);
+      expect((await post(`/v1/organisations/${patron.organisationId}/membres/${encodeURIComponent(patron.identifiant)}/deconnexion`, {}, patron)).statusCode).toBe(400);
     });
   });
 
   describe('journal d’activité', () => {
-    const inviter = (patron: Session, corps: Record<string, unknown>) => post(`/v1/organisations/${patron.organisationId}/membres`, corps, patron);
     const journal = async (s: Session, requete = '', org = s.organisationId) => get(`/v1/organisations/${org}/journal${requete}`, s);
 
     it('note qui a créé, modifié, annulé, sans doublon quand un appareil renvoie la même fiche', async () => {
@@ -515,7 +824,7 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       const r = (await journal(patron)).json() as { entrees: EntreeJournal[]; reste: boolean };
       const ponteEntrees = r.entrees.filter((x) => x.table === 'pontes');
       expect(ponteEntrees.map((x) => x.action)).toEqual(['annulation', 'modification', 'creation']);
-      expect(ponteEntrees[2]).toMatchObject({ telephone: '+221775000002', nom: 'Awa Fall', fonction: 'Aide', description: '9 œufs', faitLe: MAINTENANT + 1, enregistrementId: 'p1' });
+      expect(ponteEntrees[2]).toMatchObject({ identifiant: aide.identifiant, nom: 'Awa Fall', fonction: 'Aide', description: '9 œufs', faitLe: MAINTENANT + 1, enregistrementId: 'p1' });
     });
 
     it('ne note pas ce qui a été refusé', async () => {
@@ -530,15 +839,15 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
     it('note aussi les changements d’utilisateurs, et réserve la consultation aux autorisés', async () => {
       const patron = await seConnecter(banc, '77 500 00 05');
       const org = patron.organisationId;
-      await inviter(patron, { telephone: '77 500 00 06', role: 'soigneur', nom: 'Moussa', fonction: 'Responsable bâtiment A' });
+      const moussa = (await inviter(patron, { telephone: '77 500 00 06', role: 'soigneur', nom: 'Moussa Diallo', fonction: 'Responsable bâtiment A' })).json().identifiant as string;
       await inviter(patron, { telephone: '77 500 00 06', role: 'caissier' });
-      await post(`/v1/organisations/${org}/membres/${encodeURIComponent('+221775000006')}/deconnexion`, {}, patron);
-      await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${org}/membres/${encodeURIComponent('+221775000006')}`, headers: patron.entetes });
+      await post(`/v1/organisations/${org}/membres/${encodeURIComponent(moussa)}/deconnexion`, {}, patron);
+      await banc.app.inject({ method: 'DELETE', url: `/v1/organisations/${org}/membres/${encodeURIComponent(moussa)}`, headers: patron.entetes });
       const r = (await journal(patron)).json() as { entrees: EntreeJournal[] };
       const phrases = r.entrees.filter((x) => x.action === 'utilisateur').map((x) => x.description);
       expect(phrases).toHaveLength(4);
-      expect(phrases[3]).toMatch(/a ajouté Moussa \(Responsable bâtiment A\) · profil soigneur/);
-      expect(phrases[2]).toMatch(/a modifié les droits de Moussa/);
+      expect(phrases[3]).toMatch(/a ajouté Moussa Diallo \(Responsable bâtiment A\) · identifiant diallo\.moussa, profil soigneur/);
+      expect(phrases[2]).toMatch(/a modifié les droits de Moussa Diallo/);
       expect(phrases[0]).toMatch(/a retiré/);
 
       await inviter(patron, { telephone: '77 500 00 07', role: 'soigneur' });
@@ -560,14 +869,13 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect(page2.entrees).toHaveLength(3);
       expect(page2.reste).toBe(false);
       expect(((await journal(patron, '?table=lots')).json() as { entrees: EntreeJournal[] }).entrees.map((x) => x.enregistrementId)).toEqual(['lot-x']);
-      expect(((await journal(patron, '?telephone=77%20500%2000%2009')).json() as { entrees: EntreeJournal[] }).entrees.every((x) => x.telephone === '+221775000009')).toBe(true);
+      expect(((await journal(patron, `?identifiant=${patron.identifiant}`)).json() as { entrees: EntreeJournal[] }).entrees.every((x) => x.identifiant === patron.identifiant)).toBe(true);
       expect((await journal(patron)).json().entrees.some((x: EntreeJournal) => x.enregistrementId === 'z')).toBe(false);
       expect((await journal(patron, '', autre.organisationId)).statusCode).toBe(404);
     });
   });
 
   describe('bâtiments réservés (zones appliquées par le serveur)', () => {
-    const inviter = (patron: Session, corps: Record<string, unknown>) => post(`/v1/organisations/${patron.organisationId}/membres`, corps, patron);
 
     async function ferme(tel: string) {
       const patron = await seConnecter(banc, tel);
@@ -646,9 +954,13 @@ describe('configuration du serveur', () => {
   it('exige une base de données', () => {
     expect(() => lireConfig({})).toThrow(/DATABASE_URL/);
   });
-  it('exige un secret en production et interdit le code de démonstration', () => {
+  it('exige un secret en production', () => {
     expect(() => lireConfig({ NODE_ENV: 'production', DATABASE_URL: 'x' })).toThrow(/DIGITALAB_SECRET/);
-    expect(() => lireConfig({ NODE_ENV: 'production', DATABASE_URL: 'x', DIGITALAB_SECRET: 'un-secret-assez-long', DIGITALAB_CODE_DEMO: '1' })).toThrow(/CODE_DEMO/);
+  });
+  it('lit la clé d’installation si elle est donnée, sinon laisse le serveur en inventer une', () => {
+    expect(lireConfig({ DATABASE_URL: 'x' }).cleInstallation).toBeNull();
+    expect(lireConfig({ DATABASE_URL: 'x', DIGITALAB_CLE_INSTALLATION: ' abcd-efgh ' }).cleInstallation).toBe('abcd-efgh');
+    expect(lireConfig({ DATABASE_URL: 'x' }).coutMotDePasse).toEqual({ N: 32768, r: 8, p: 3 });
   });
   it('lit les origines autorisées', () => {
     const c = lireConfig({ DATABASE_URL: 'x', DIGITALAB_ORIGINES: 'https://a.sn, https://b.sn' });

@@ -42,10 +42,10 @@ export function PageJournal({ elevage }: { elevage: Elevage }) {
     setOccupe(true);
     setErreur(null);
     try {
-      const r = await synchro.journal({ ...(suite && entrees.length ? { avant: entrees.at(-1)!.id } : {}), ...(personne ? { telephone: personne } : {}) });
+      const r = await synchro.journal({ ...(suite && entrees.length ? { avant: entrees.at(-1)!.id } : {}), ...(personne ? { identifiant: personne } : {}) });
       setEntrees(suite ? [...entrees, ...r.entrees] : r.entrees);
       setReste(r.reste);
-      if (!personne) setConnus((m) => new Map([...m, ...r.entrees.map((x): [string, string] => [x.telephone, x.nom ?? x.telephone])]));
+      if (!personne) setConnus((m) => new Map([...m, ...r.entrees.map((x): [string, string] => [x.identifiant, x.nom ?? x.identifiant])]));
     } catch (e) {
       setErreur(message(e));
     } finally {
@@ -114,7 +114,7 @@ export function PageJournal({ elevage }: { elevage: Elevage }) {
             {g.lignes.map((x) => (
               <div key={x.id} className="ligne ligne-journal">
                 <span>
-                  <b>{x.nom ?? x.telephone}</b>{x.fonction ? <small className="muet"> · {x.fonction}</small> : null}
+                  <b>{x.nom ?? x.identifiant}</b>{x.fonction ? <small className="muet"> · {x.fonction}</small> : null}
                   <br />
                   {phraseJournal(x)}
                   {Date.parse(x.recuLe) - x.faitLe > DELAI_HORS_LIGNE_MS && <><br /><small className="muet">fait sans réseau, reçu à {heure(Date.parse(x.recuLe))}</small></>}

@@ -15,7 +15,9 @@ export interface Verrou {
 /** L'appareil appartient à la dernière personne qui s'y est connectée. */
 export interface ProprietaireAppareil {
   organisationId: string;
-  telephone: string;
+  identifiant: string;
+  /** Adresse du serveur : proposée de nouveau à la reconnexion. */
+  url?: string;
   /** Saisies faites sur cet appareil et jamais envoyées au serveur au moment de la déconnexion. */
   nonEnvoyes: number;
 }

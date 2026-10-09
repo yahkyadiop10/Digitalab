@@ -98,7 +98,7 @@ function Page({ elevage }: { elevage: Elevage }) {
     case 'journal':
       return <PageJournal elevage={elevage} />;
     case 'utilisateurs':
-      return a ? <FormUtilisateur elevage={elevage} {...(a === 'nouveau' ? {} : { telephone: decodeURIComponent(a) })} /> : <PageUtilisateurs elevage={elevage} />;
+      return a ? <FormUtilisateur elevage={elevage} {...(a === 'nouveau' ? {} : { identifiant: decodeURIComponent(a) })} /> : <PageUtilisateurs elevage={elevage} />;
     case 'reglages':
       return <Reglages elevage={elevage} />;
     default:

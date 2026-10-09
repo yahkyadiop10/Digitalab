@@ -1,4 +1,5 @@
 export * from './alertes';
+export * from './comptes';
 export * from './dates';
 export * from './effectif';
 export * from './fiche';

@@ -19,13 +19,14 @@ await admin.query(`CREATE DATABASE ${nomBase}`);
 const urlBase = new URL(base);
 urlBase.pathname = `/${nomBase}`;
 
+const CLE_INSTALLATION = 'e2e-cle-0001';
 const PORT_API = 8099;
 const PORT_WEB = 4174;
 const URL_API = `http://localhost:${PORT_API}`;
 const racine = fileURLToPath(new URL('../../..', import.meta.url));
 const api = spawn(process.execPath, ['--import', 'tsx', 'apps/api/src/main.ts'], {
   cwd: racine,
-  env: { ...process.env, DATABASE_URL: urlBase.toString(), PORT: String(PORT_API), DIGITALAB_CODE_DEMO: '1', DIGITALAB_SECRET: 'secret-e2e-0123456789' },
+  env: { ...process.env, DATABASE_URL: urlBase.toString(), PORT: String(PORT_API), DIGITALAB_CLE_INSTALLATION: CLE_INSTALLATION, DIGITALAB_SECRET: 'secret-e2e-0123456789' },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 await new Promise((resolve, reject) => {
@@ -57,15 +58,51 @@ async function choisirCode(page) {
   await page.getByRole('button', { name: 'Enregistrer mon code' }).click();
 }
 
-async function connecter(page, telephone) {
-  await page.getByLabel('Votre numéro de téléphone').fill(telephone);
+const MOT_DE_PASSE_ADMIN = 'Poule-Pondeuse-7';
+const MOT_DE_PASSE_VETO = 'Veto-Du-Village-42';
+
+/** Premier lancement : le serveur n'a pas d'administrateur, la page de connexion propose de le créer. Renvoie les codes de secours. */
+async function creerAdministrateur(page) {
   await page.getByLabel('Adresse du serveur').fill(URL_API);
-  await page.getByRole('button', { name: 'Recevoir un code' }).click();
-  await page.getByText(/Mode démonstration/).waitFor();
-  const code = (await page.locator('form b').last().innerText()).trim();
-  await page.getByLabel('Code reçu').fill(code);
-  await page.getByRole('button', { name: 'Valider' }).click();
+  await page.getByRole('heading', { name: 'Créer l’administrateur' }).waitFor();
+  // Sans la bonne clé affichée dans la console du serveur, la création est refusée.
+  await page.getByLabel('Clé d’installation').fill('mauvaise-cle');
+  await page.getByLabel('Nom de l’élevage').fill('Ferme sync');
+  await page.getByLabel('Votre nom').fill('Aminata Sow');
+  await page.getByLabel('Mot de passe', { exact: true }).fill(MOT_DE_PASSE_ADMIN);
+  await page.getByLabel('Confirmez le mot de passe').fill(MOT_DE_PASSE_ADMIN);
+  await page.getByRole('button', { name: 'Créer l’administrateur' }).click();
+  await page.getByText(/Clé d’installation incorrecte/).waitFor();
+  await page.getByLabel('Clé d’installation').fill(CLE_INSTALLATION);
+  // Un mot de passe qui contient l'identifiant est refusé avant même d'appeler le serveur.
+  await page.getByLabel('Mot de passe', { exact: true }).fill('admin 1234');
+  await page.getByLabel('Confirmez le mot de passe').fill('admin 1234');
+  await page.getByRole('button', { name: 'Créer l’administrateur' }).click();
+  await page.getByText(/ne doit pas contenir votre identifiant/).waitFor();
+  await page.getByLabel('Mot de passe', { exact: true }).fill(MOT_DE_PASSE_ADMIN);
+  await page.getByLabel('Confirmez le mot de passe').fill(MOT_DE_PASSE_ADMIN);
+  await page.getByRole('button', { name: 'Créer l’administrateur' }).click();
+  await page.getByRole('heading', { name: 'Vos codes de secours' }).waitFor();
+  const codes = await page.locator('.codes-secours code').allInnerTexts();
+  assert.equal(codes.length, 8);
+  assert.match(codes[0], /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
+  // On ne peut pas continuer sans avoir confirmé qu'on les a notés.
+  assert.equal(await page.getByRole('button', { name: 'Entrer dans l’application' }).isDisabled(), true);
+  await page.getByLabel('J’ai noté mes codes de secours en lieu sûr').check();
+  await page.getByRole('button', { name: 'Entrer dans l’application' }).click();
   await choisirCode(page);
+  return codes;
+}
+
+/** Connexion d'une personne ajoutée par l'administrateur : mot de passe provisoire, puis choix de son propre mot de passe. */
+async function connecterAvecProvisoire(page, identifiant, provisoire, nouveau) {
+  await page.getByLabel('Identifiant', { exact: true }).fill(identifiant);
+  await page.getByLabel('Mot de passe', { exact: true }).fill(provisoire);
+  await page.getByRole('button', { name: 'Se connecter' }).click();
+  await page.getByRole('heading', { name: 'Choisissez votre mot de passe' }).waitFor();
+  await page.getByLabel('Nouveau mot de passe', { exact: true }).fill(nouveau);
+  await page.getByLabel('Confirmez le nouveau mot de passe').fill(nouveau);
+  await page.getByRole('button', { name: 'Enregistrer et continuer' }).click();
 }
 
 async function synchroniser(page) {
@@ -77,7 +114,7 @@ async function synchroniser(page) {
 const a = await appareil('proprietaire');
 const v = await appareil('veterinaire');
 try {
-  console.log('→ 1 propriétaire : démarrage et compte');
+  console.log('→ 1 propriétaire : démarrage, création de l’administrateur (clé d’installation, codes de secours)');
   await a.page.goto(`http://localhost:${PORT_WEB}/`);
   await a.page.getByText('Bienvenue sur AviMaster').waitFor();
   await a.page.getByLabel('Nom de votre élevage (facultatif)').fill('Ferme sync');
@@ -86,7 +123,7 @@ try {
   await a.page.getByText('Ferme sync').waitFor();
   await a.page.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
   await a.page.getByRole('link', { name: /Partager avec mes aides/ }).click();
-  await connecter(a.page, '77 000 00 01');
+  const codesSecours = await creerAdministrateur(a.page);
   await a.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   await a.page.getByRole('banner').getByRole('link', { name: 'Compte et synchronisation' }).click();
   await a.page.getByRole('banner').getByRole('link', { name: 'Compte et synchronisation' }).click();
@@ -95,33 +132,44 @@ try {
   await a.page.getByRole('button', { name: 'Synchroniser maintenant' }).click();
   await a.page.getByText(/Tout est à jour|Synchronisé ✓/).waitFor();
 
-  console.log('→ 2 propriétaire ajoute le vétérinaire dans « Gestion des utilisateurs » et reçoit un code');
+  console.log('→ 2 propriétaire ajoute le vétérinaire : identifiant nom.prénom et mot de passe provisoire montré une fois');
   await a.page.getByRole('link', { name: /Gestion des utilisateurs/ }).click();
   await a.page.getByRole('heading', { name: 'Gestion des utilisateurs' }).waitFor();
   await a.page.getByRole('link', { name: '+ Ajouter un utilisateur' }).click();
-  await a.page.getByLabel('Nom de la personne').fill('Dr Sy');
+  await a.page.getByLabel('Prénom').fill('Dr');
+  await a.page.getByLabel('Nom', { exact: true }).fill('Sy');
+  await a.page.getByText(/L’identifiant sera créé automatiquement : sy\.dr/).waitFor();
   await a.page.getByLabel('Fonction dans la ferme').fill('Vétérinaire');
-  await a.page.getByLabel('Téléphone', { exact: true }).fill('77 000 00 02');
+  await a.page.getByLabel('Téléphone (facultatif)').fill('77 000 00 02');
   await a.page.getByLabel('Profil de départ').selectOption({ label: 'Vétérinaire' });
   // Le profil coche des fonctions ; on en décoche une pour vérifier que les cases sont libres.
   await a.page.getByLabel('Tout cocher : Finances').check();
   await a.page.getByLabel('Tout cocher : Finances').uncheck();
   if (process.env.CAPTURES) await a.page.screenshot({ path: `${process.env.CAPTURES}/u1.png`, fullPage: true });
-  await a.page.getByRole('button', { name: 'Ajouter et obtenir le code' }).click();
-  await a.page.getByRole('heading', { name: 'Code de connexion' }).waitFor();
-  const codeInvitation = (await a.page.locator('.gros-code').innerText()).trim();
+  await a.page.getByRole('button', { name: 'Ajouter et obtenir le mot de passe provisoire' }).click();
+  await a.page.getByRole('heading', { name: 'Compte créé' }).waitFor();
+  const identifiantVeto = (await a.page.locator('.carte .ligne b').first().innerText()).trim();
+  const provisoireVeto = (await a.page.locator('.gros-mdp').innerText()).trim();
   if (process.env.CAPTURES) await a.page.screenshot({ path: `${process.env.CAPTURES}/u2.png`, fullPage: true });
-  assert.match(codeInvitation, /^\d{6}$/);
+  assert.equal(identifiantVeto, 'sy.dr');
+  assert.match(provisoireVeto, /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
+  // Le mot de passe provisoire n'est montré qu'une fois : la liste n'en garde aucune trace.
+  await a.page.getByRole('link', { name: 'Terminé' }).click();
+  await a.page.getByText('Dr Sy').waitFor();
+  assert.match(await a.texte(), /mot de passe provisoire pas encore changé/);
+  assert.ok(!(await a.texte()).includes(provisoireVeto));
 
-  console.log('→ 3 vétérinaire : se connecte avec le code donné, sans SMS, sur un autre téléphone');
+  console.log('→ 3 vétérinaire : se connecte sur un autre téléphone, doit choisir son propre mot de passe');
   await v.page.goto(`http://localhost:${PORT_WEB}/`);
   await v.page.getByText('Bienvenue sur AviMaster').waitFor();
   await v.page.getByRole('link', { name: /J’ai déjà un compte/ }).click();
-  await v.page.getByLabel('Votre numéro de téléphone').fill('77 000 00 02');
   await v.page.getByLabel('Adresse du serveur').fill(URL_API);
-  await v.page.getByRole('button', { name: 'J’ai déjà un code donné par mon administrateur' }).click();
-  await v.page.getByLabel('Code reçu').fill(codeInvitation);
-  await v.page.getByRole('button', { name: 'Valider' }).click();
+  // Un mauvais mot de passe reçoit un message qui ne dit pas si l'identifiant existe.
+  await v.page.getByLabel('Identifiant', { exact: true }).fill('sy.dr');
+  await v.page.getByLabel('Mot de passe', { exact: true }).fill('pas-le-bon-mot-de-passe');
+  await v.page.getByRole('button', { name: 'Se connecter' }).click();
+  await v.page.getByText('Identifiant ou mot de passe incorrect.').waitFor();
+  await connecterAvecProvisoire(v.page, 'sy.dr', provisoireVeto.toUpperCase(), MOT_DE_PASSE_VETO);
   await choisirCode(v.page);
   await v.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   await voir(v.page, /20\s+animaux/);
@@ -185,13 +233,60 @@ try {
   await a.page.getByRole('heading', { name: 'Journal d’activité' }).waitFor();
   await voir(a.page, /a ajouté une ponte : 9 œufs/);
   await voir(a.page, /a ajouté Dr Sy \(Vétérinaire\)/);
+  await voir(a.page, /a choisi son mot de passe personnel/);
+  assert.doesNotMatch(await a.texte(), new RegExp(provisoireVeto));
   assert.match(await a.texte(), /a ajouté une opération financière : recette/);
   // Le vétérinaire n'a pas ce droit : la page lui répond clairement.
   await v.page.evaluate(() => { window.location.hash = '#/journal'; });
   await v.page.getByText('Votre profil ne permet pas de consulter le journal d’activité.').waitFor();
 
+  console.log('→ 8 mot de passe oublié par le vétérinaire : l’administrateur en génère un nouveau, l’ancien ne marche plus');
+  await a.page.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
+  await a.page.getByRole('link', { name: /Gestion des utilisateurs/ }).click();
+  await a.page.getByRole('link', { name: /Dr Sy/ }).click();
+  await a.page.getByRole('button', { name: 'Réinitialiser son mot de passe' }).click();
+  await a.page.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
+  await a.page.getByRole('heading', { name: 'Nouveau mot de passe provisoire' }).waitFor();
+  const nouveauProvisoire = (await a.page.locator('.gros-mdp').innerText()).trim();
+  assert.notEqual(nouveauProvisoire, provisoireVeto);
+  // Ses appareils sont déconnectés : sa prochaine synchronisation est refusée.
+  await v.page.getByRole('banner').getByRole('link', { name: /Compte et synchronisation/ }).click();
+  await v.page.getByRole('button', { name: 'Synchroniser maintenant' }).click();
+  await v.page.getByRole('status').filter({ hasText: 'Votre session a expiré.' }).waitFor();
+  await v.page.getByRole('button', { name: 'Se déconnecter de cet appareil' }).click();
+  await v.page.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
+  await v.page.getByRole('heading', { name: 'Connexion' }).waitFor();
+  // L'adresse du serveur est reprise : il n'a pas à la retaper.
+  await v.page.getByLabel('Identifiant', { exact: true }).fill('sy.dr');
+  await v.page.getByLabel('Mot de passe', { exact: true }).fill(MOT_DE_PASSE_VETO);
+  await v.page.getByRole('button', { name: 'Se connecter' }).click();
+  await v.page.getByText('Identifiant ou mot de passe incorrect.').waitFor();
+  await connecterAvecProvisoire(v.page, 'sy.dr', nouveauProvisoire, 'Nouveau-Veto-Du-Village-43');
+  await v.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
+
+  console.log('→ 9 mot de passe oublié par le propriétaire : un code de secours, qui ne sert qu’une fois');
+  await a.page.evaluate(() => { window.location.hash = '#/compte'; });
+  await a.page.getByRole('button', { name: 'Se déconnecter de cet appareil' }).click();
+  await a.page.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
+  await a.page.getByRole('heading', { name: 'Connexion' }).waitFor();
+  await a.page.getByText('J’ai oublié mon mot de passe').click();
+  await a.page.getByRole('button', { name: 'Utiliser un code de secours' }).click();
+  await a.page.getByLabel('Identifiant', { exact: true }).fill('admin');
+  await a.page.getByLabel('Code de secours').fill(codesSecours[0].toUpperCase());
+  await a.page.getByLabel('Nouveau mot de passe', { exact: true }).fill('Mon-Mot-De-Passe-Retrouve-5');
+  await a.page.getByLabel('Confirmez le nouveau mot de passe').fill('Mon-Mot-De-Passe-Retrouve-5');
+  await a.page.getByRole('button', { name: 'Choisir ce mot de passe' }).click();
+  await a.page.getByText('Votre mot de passe est changé.').waitFor();
+  await a.page.getByLabel('Mot de passe', { exact: true }).fill(MOT_DE_PASSE_ADMIN);
+  await a.page.getByRole('button', { name: 'Se connecter' }).click();
+  await a.page.getByText('Identifiant ou mot de passe incorrect.').waitFor();
+  await a.page.getByLabel('Mot de passe', { exact: true }).fill('Mon-Mot-De-Passe-Retrouve-5');
+  await a.page.getByRole('button', { name: 'Se connecter' }).click();
+  await a.page.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
+  assert.doesNotMatch(await a.texte(), /Choisissez votre code/);
+
   assert.deepEqual(erreurs, []);
-  console.log('E2E SYNCHRO OK : compte par code, utilisateur ajouté avec code de connexion, droits appliqués (menus, pages, données non envoyées), saisie partagée, reprise après coupure, journal d’activité');
+  console.log('E2E SYNCHRO OK : administrateur créé avec clé d’installation et codes de secours, utilisateur avec mot de passe provisoire à changer, réinitialisation, code de secours, droits appliqués (menus, pages, données non envoyées), saisie partagée, reprise après coupure, journal d’activité');
 } catch (e) {
   await a.page.screenshot({ path: new URL('./echec-a.png', import.meta.url).pathname }).catch(() => {});
   await v.page.screenshot({ path: new URL('./echec-v.png', import.meta.url).pathname }).catch(() => {});

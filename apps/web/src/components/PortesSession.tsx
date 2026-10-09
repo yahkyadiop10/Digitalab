@@ -26,7 +26,7 @@ export function PorteConnexion({ deconnecteAuto, nom }: { deconnecteAuto: boolea
     <Cadre>
       <h1>Connexion</h1>
       {deconnecteAuto && <div className="bandeau n-jaune" role="status"><strong>Vous avez été déconnecté</strong><span>Après un moment sans utiliser l’application, elle se ferme pour protéger {nom ? `les données de ${nom}` : 'vos données'}.</span></div>}
-      <p className="muet">Reconnectez-vous avec votre numéro de téléphone. Les saisies que vous aviez faites sur cet appareil sont toujours là et seront envoyées après la connexion.</p>
+      <p className="muet">Reconnectez-vous avec votre identifiant et votre mot de passe. Les saisies que vous aviez faites sur cet appareil sont toujours là et seront envoyées après la connexion.</p>
       <FormConnexion apres={() => { marquerActivite(); aller('accueil'); }} />
       <div className="carte">
         <button
@@ -129,7 +129,7 @@ export function Verrou({ elevage, connecte, surDeverrouillage }: { elevage: Elev
           <div className="carte">
             {connecte ? (
               <>
-                <p>Vous allez être déconnecté, puis vous reconnecter avec votre numéro de téléphone et choisir un nouveau code. Vos données restent sur cet appareil.</p>
+                <p>Vous allez être déconnecté, puis vous reconnecter avec votre identifiant et votre mot de passe, puis choisir un nouveau code. Vos données restent sur cet appareil.</p>
                 <button className="bouton alt" onClick={async () => { if (await confirmer('Se déconnecter pour choisir un nouveau code ?')) await reconnexion(); }}>Me reconnecter</button>
               </>
             ) : (

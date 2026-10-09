@@ -19,7 +19,7 @@ export interface Connexion {
   cle: 'serveur';
   url: string;
   jeton: string;
-  telephone: string;
+  identifiant: string;
   organisationId: string;
   organisationNom: string;
   role: RoleMembre;

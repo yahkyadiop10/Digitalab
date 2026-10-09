@@ -1,20 +1,22 @@
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import {
-  LIBELLES_PROFILS, PROFILS_ASSIGNABLES, TABLES_SYNCHRONISEES, aDroit, decrireEnregistrement, determinerAction, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, nettoyerDroits, normaliserTelephone, peutAnnuler, peutEcrireTable,
-  peutLireTable, peutValiderDepense, tablesEcrivables,
+  BLOCAGE_CONNEXION_MINUTES, ESSAIS_CONNEXION_MAX, LIBELLES_PROFILS, MOT_DE_PASSE_PROVISOIRE_JOURS, PROFILS_ASSIGNABLES, TABLES_SYNCHRONISEES,
+  aDroit, decrireEnregistrement, determinerAction, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, identifiantDepuisNom, identifiantLibre, nettoyerDroits,
+  normaliserIdentifiant, normaliserTelephone, peutAnnuler, peutEcrireTable, peutLireTable, peutValiderDepense, problemeIdentifiant, problemeMotDePasse, tablesEcrivables,
   type ActionJournal, type ChangementSync, type DemandeSync, type DroitsMembre, type EntreeJournal, type ReponseSync, type RoleMembre, type TableSynchronisee,
 } from '@digitalab/core';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Config } from './config.js';
 import { transaction, type Pool } from './db.js';
-import type { Notifieur } from './notifieur.js';
-import { egaux, empreinteCode, empreinteJeton, genererCode, genererJeton } from './securite.js';
+import { sansAdministrateur } from './installation.js';
+import {
+  egaux, empreinteCodeSecours, empreinteJeton, genererCodeSecours, genererJeton, genererMotDePasseProvisoire, hacherMotDePasse, normaliserCle, normaliserCodeSecours, verifierMotDePasse,
+} from './securite.js';
 
 export interface Dependances {
   pool: Pool;
   config: Config;
-  notifieur: Notifieur;
   /** Horloge, remplaçable dans les tests. */
   maintenant?: () => Date;
   /** Nombre de demandes de connexion par minute et par adresse (15 par défaut ; relevé dans les tests). */
@@ -23,8 +25,11 @@ export interface Dependances {
 
 interface Utilisateur {
   id: string;
-  telephone: string;
+  identifiant: string;
   nom: string | null;
+  telephone: string | null;
+  /** Mot de passe provisoire : la personne doit d'abord en choisir un autre. */
+  doitChanger: boolean;
 }
 
 declare module 'fastify' {
@@ -34,19 +39,19 @@ declare module 'fastify' {
 }
 
 class ErreurHttp extends Error {
-  constructor(readonly statut: number, message: string) {
+  constructor(readonly statut: number, message: string, readonly code?: string) {
     super(message);
   }
 }
 
-const VALIDITE_INVITATION_JOURS = 7;
-const MAX_ESSAIS_INVITATION = 5;
 const LIMITE_REPONSE_SYNC = 1000;
 const TAILLE_MAX_ENREGISTREMENT = 50_000;
-const MAX_ESSAIS_CODE = 5;
+const NOMBRE_CODES_SECOURS = 8;
+const MESSAGE_IDENTIFIANTS = 'Identifiant ou mot de passe incorrect.';
+const JOUR_MS = 86_400_000;
 
 export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
-  const { pool, config, notifieur } = dep;
+  const { pool, config } = dep;
   const maintenant = dep.maintenant ?? (() => new Date());
   const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024, trustProxy: true });
 
@@ -54,7 +59,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 
   app.setErrorHandler((err: Error & { statusCode?: number; validation?: unknown }, _req, reply) => {
-    if (err instanceof ErreurHttp) return reply.status(err.statut).send({ erreur: err.message });
+    if (err instanceof ErreurHttp) return reply.status(err.statut).send({ erreur: err.message, ...(err.code ? { code: err.code } : {}) });
     if (err.validation) return reply.status(400).send({ erreur: 'Demande invalide.' });
     if (err.statusCode === 429) return reply.status(429).send({ erreur: 'Trop de demandes. Réessayez dans un instant.' });
     if (err.statusCode && err.statusCode < 500) return reply.status(err.statusCode).send({ erreur: 'Demande invalide.' });
@@ -65,16 +70,19 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
 
   /* ---------- Authentification ---------- */
 
-  async function authentifier(req: FastifyRequest): Promise<Utilisateur> {
+  /** Identifie la personne par son jeton. Tant qu'elle n'a pas remplacé son mot de passe provisoire, seules les routes `permissif` lui sont ouvertes. */
+  async function authentifier(req: FastifyRequest, options: { permissif?: boolean } = {}): Promise<Utilisateur> {
     const entete = req.headers.authorization ?? '';
     const jeton = entete.startsWith('Bearer ') ? entete.slice(7).trim() : '';
     if (!jeton) throw new ErreurHttp(401, 'Connexion requise.');
     const r = await pool.query<Utilisateur>(
-      `SELECT u.id, u.telephone, u.nom FROM sessions s JOIN utilisateurs u ON u.id = s.utilisateur_id WHERE s.jeton_hash = $1 AND s.expire_le > $2`,
+      `SELECT u.id, u.identifiant, u.nom, u.telephone, u.doit_changer AS "doitChanger"
+       FROM sessions s JOIN utilisateurs u ON u.id = s.utilisateur_id WHERE s.jeton_hash = $1 AND s.expire_le > $2`,
       [empreinteJeton(jeton), maintenant()],
     );
     const u = r.rows[0];
     if (!u) throw new ErreurHttp(401, 'Session expirée. Reconnectez-vous.');
+    if (u.doitChanger && !options.permissif) throw new ErreurHttp(403, 'Choisissez d’abord votre propre mot de passe.', 'changement_requis');
     req.utilisateur = u;
     return u;
   }
@@ -117,129 +125,305 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
 
   interface Acteur {
     id: string;
-    telephone: string;
+    identifiant: string;
     nom: string | null;
     fonction: string | null;
   }
 
   async function acteurDe(organisationId: string, u: Utilisateur): Promise<Acteur> {
-    const r = await pool.query<{ nom: string | null; fonction: string | null }>(
-      'SELECT COALESCE(us.nom, m.nom_affiche) AS nom, m.fonction FROM membres m LEFT JOIN utilisateurs us ON us.id = m.utilisateur_id WHERE m.organisation_id = $1 AND m.utilisateur_id = $2',
-      [organisationId, u.id],
-    );
-    return { id: u.id, telephone: u.telephone, nom: r.rows[0]?.nom ?? u.nom, fonction: r.rows[0]?.fonction ?? null };
+    const r = await pool.query<{ fonction: string | null }>('SELECT fonction FROM membres WHERE organisation_id = $1 AND utilisateur_id = $2', [organisationId, u.id]);
+    return { id: u.id, identifiant: u.identifiant, nom: u.nom, fonction: r.rows[0]?.fonction ?? null };
   }
+
+  type Executeur = { query: (texte: string, valeurs: unknown[]) => Promise<unknown> };
 
   /** Écrit une ligne du journal (dans la transaction en cours quand on en passe une). */
   async function journaliser(
-    executeur: { query: (texte: string, valeurs: unknown[]) => Promise<unknown> },
+    executeur: Executeur,
     organisationId: string, acteur: Acteur, action: ActionJournal, table: string, enregistrementId: string, description: string, faitLe: number,
   ): Promise<void> {
     await executeur.query(
-      `INSERT INTO journal (organisation_id, fait_le, utilisateur_id, telephone, nom, fonction, action, table_nom, enregistrement_id, description)
+      `INSERT INTO journal (organisation_id, fait_le, utilisateur_id, identifiant, nom, fonction, action, table_nom, enregistrement_id, description)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [organisationId, faitLe, acteur.id, acteur.telephone, acteur.nom, acteur.fonction, action, table, enregistrementId, description.slice(0, 300)],
+      [organisationId, faitLe, acteur.id, acteur.identifiant, acteur.nom, acteur.fonction, action, table, enregistrementId, description.slice(0, 300)],
     );
+  }
+
+  /** Une action qui touche le compte lui-même (mot de passe…) est notée dans le journal de chaque élevage de la personne. */
+  async function journaliserCompte(executeur: Executeur & Pick<Pool, 'query'>, u: Utilisateur, description: string): Promise<void> {
+    const orgs = await executeur.query<{ organisation_id: string; fonction: string | null }>('SELECT organisation_id, fonction FROM membres WHERE utilisateur_id = $1', [u.id]);
+    for (const o of orgs.rows) {
+      await journaliser(executeur, o.organisation_id, { id: u.id, identifiant: u.identifiant, nom: u.nom, fonction: o.fonction }, 'utilisateur', 'utilisateurs', u.identifiant, description, maintenant().getTime());
+    }
   }
 
   const limiteAuth = { config: { rateLimit: { max: dep.limiteAuthParMinute ?? 15, timeWindow: '1 minute' } } };
 
-  app.post('/v1/auth/code', {
-    ...limiteAuth,
-    schema: { body: { type: 'object', required: ['telephone'], properties: { telephone: { type: 'string', maxLength: 30 } }, additionalProperties: false } },
-  }, async (req) => {
-    const telephone = normaliserTelephone((req.body as { telephone: string }).telephone);
-    if (!telephone) throw new ErreurHttp(400, 'Numéro de téléphone invalide. Exemple : 77 123 45 67.');
+  /* Blocage après trop d'échecs : suivi par identifiant, qu'il existe ou non, pour ne rien révéler. */
+
+  async function verifierBlocage(cle: string): Promise<void> {
+    const r = await pool.query<{ verrouille_jusqua: Date | null }>('SELECT verrouille_jusqua FROM echecs_connexion WHERE cle = $1', [cle]);
+    const jusqua = r.rows[0]?.verrouille_jusqua;
+    if (jusqua && jusqua > maintenant()) {
+      const minutes = Math.max(1, Math.ceil((jusqua.getTime() - maintenant().getTime()) / 60_000));
+      throw new ErreurHttp(429, `Trop d’essais. Réessayez dans ${minutes} minute${minutes > 1 ? 's' : ''}.`);
+    }
+  }
+
+  async function noterEchec(cle: string): Promise<void> {
     const now = maintenant();
-    const recent = await pool.query('SELECT 1 FROM codes_connexion WHERE telephone = $1 AND cree_le > $2', [telephone, new Date(now.getTime() - 60_000)]);
-    if (recent.rowCount) throw new ErreurHttp(429, 'Un code vient d’être envoyé. Patientez une minute avant d’en demander un autre.');
-    const code = genererCode();
-    await pool.query(
-      `INSERT INTO codes_connexion (telephone, code_hash, expire_le, essais, cree_le) VALUES ($1, $2, $3, 0, $4)
-       ON CONFLICT (telephone) DO UPDATE SET code_hash = EXCLUDED.code_hash, expire_le = EXCLUDED.expire_le, essais = 0, cree_le = EXCLUDED.cree_le`,
-      [telephone, empreinteCode(config.secret, telephone, code), new Date(now.getTime() + config.codeValiditeMinutes * 60_000), now],
+    const r = await pool.query<{ essais: number }>(
+      `INSERT INTO echecs_connexion (cle, essais, dernier_le) VALUES ($1, 1, $2)
+       ON CONFLICT (cle) DO UPDATE SET
+         essais = CASE WHEN echecs_connexion.verrouille_jusqua IS NOT NULL AND echecs_connexion.verrouille_jusqua <= $2 THEN 1 ELSE echecs_connexion.essais + 1 END,
+         dernier_le = $2
+       RETURNING essais`,
+      [cle, now],
     );
-    await notifieur.envoyerCode(telephone, code);
-    return { ok: true, telephone, ...(config.codeDemo ? { codeDemo: code } : {}) };
+    if ((r.rows[0]?.essais ?? 0) >= ESSAIS_CONNEXION_MAX) {
+      await pool.query('UPDATE echecs_connexion SET essais = 0, verrouille_jusqua = $2 WHERE cle = $1', [cle, new Date(now.getTime() + BLOCAGE_CONNEXION_MINUTES * 60_000)]);
+    }
+    await pool.query('DELETE FROM echecs_connexion WHERE dernier_le < $1 AND (verrouille_jusqua IS NULL OR verrouille_jusqua < $1)', [new Date(now.getTime() - JOUR_MS)]);
+  }
+
+  const oublierEchecs = (cle: string) => pool.query('DELETE FROM echecs_connexion WHERE cle = $1', [cle]);
+
+  /** Empreinte factice : vérifier un identifiant inconnu prend autant de temps qu'un identifiant connu. */
+  let empreinteFactice: Promise<string> | undefined;
+  const fausseEmpreinte = () => (empreinteFactice ??= hacherMotDePasse('mot de passe inexistant', config.coutMotDePasse));
+
+  /** Un mot de passe provisoire se recopie : on tolère les majuscules et espaces que le clavier du téléphone ajoute. */
+  async function motDePasseJuste(saisi: string, empreinte: string, provisoire: boolean): Promise<boolean> {
+    if (await verifierMotDePasse(saisi, empreinte)) return true;
+    const retouche = saisi.trim().toLowerCase();
+    return provisoire && retouche !== saisi && (await verifierMotDePasse(retouche, empreinte));
+  }
+
+  async function ouvrirSession(executeur: Executeur, utilisateurId: string, appareil: string | undefined): Promise<string> {
+    const jeton = genererJeton();
+    await executeur.query('INSERT INTO sessions (jeton_hash, utilisateur_id, appareil, expire_le) VALUES ($1, $2, $3, $4)', [
+      empreinteJeton(jeton), utilisateurId, appareil ?? null, new Date(maintenant().getTime() + config.sessionJours * JOUR_MS),
+    ]);
+    return jeton;
+  }
+
+  const versUtilisateurPublic = (u: Pick<Utilisateur, 'id' | 'identifiant' | 'nom' | 'telephone'>) => ({ id: u.id, identifiant: u.identifiant, nom: u.nom, telephone: u.telephone });
+
+  /** Génère les codes de secours (remplace les précédents) et renvoie leur texte, qui ne sera plus jamais affichable. */
+  async function creerCodesSecours(executeur: Executeur, utilisateurId: string): Promise<string[]> {
+    await executeur.query('DELETE FROM codes_secours WHERE utilisateur_id = $1', [utilisateurId]);
+    const codes = Array.from({ length: NOMBRE_CODES_SECOURS }, () => genererCodeSecours());
+    for (const code of codes) {
+      await executeur.query('INSERT INTO codes_secours (utilisateur_id, code_hash) VALUES ($1, $2)', [utilisateurId, empreinteCodeSecours(config.secret, code)]);
+    }
+    return codes;
+  }
+
+  /* ----- Premier lancement : création de l'administrateur ----- */
+
+  app.get('/v1/installation', async () => ({ aInitialiser: await sansAdministrateur(pool), cleRequise: !!config.cleInstallation }));
+
+  app.post('/v1/installation', {
+    ...limiteAuth,
+    schema: {
+      body: {
+        type: 'object', required: ['identifiant', 'motDePasse'], additionalProperties: false,
+        properties: {
+          cle: { type: 'string', maxLength: 60 }, identifiant: { type: 'string', maxLength: 60 }, motDePasse: { type: 'string', maxLength: 200 },
+          nom: { type: 'string', maxLength: 80 }, nomElevage: { type: 'string', maxLength: 80 }, appareil: { type: 'string', maxLength: 80 },
+        },
+      },
+    },
+  }, async (req) => {
+    const b = req.body as { cle?: string; identifiant: string; motDePasse: string; nom?: string; nomElevage?: string; appareil?: string };
+    if (!(await sansAdministrateur(pool))) throw new ErreurHttp(409, 'L’application est déjà installée. Connectez-vous avec votre identifiant.');
+    if (config.cleInstallation) {
+      await verifierBlocage('__installation');
+      if (!egaux(normaliserCle(b.cle ?? ''), normaliserCle(config.cleInstallation))) {
+        await noterEchec('__installation');
+        throw new ErreurHttp(403, 'Clé d’installation incorrecte. Elle s’affiche dans la fenêtre du serveur.');
+      }
+    }
+    const identifiant = normaliserIdentifiant(b.identifiant);
+    const problemeId = problemeIdentifiant(identifiant);
+    if (problemeId) throw new ErreurHttp(400, problemeId);
+    const problemeMdp = problemeMotDePasse(b.motDePasse, identifiant);
+    if (problemeMdp) throw new ErreurHttp(400, problemeMdp);
+    const empreinte = await hacherMotDePasse(b.motDePasse, config.coutMotDePasse);
+    const nom = b.nom?.trim() || null;
+
+    const r = await transaction(pool, async (c) => {
+      await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('installation', 0))`);
+      if (!(await sansAdministrateur(c))) throw new ErreurHttp(409, 'L’application est déjà installée. Connectez-vous avec votre identifiant.');
+      const pris = await c.query('SELECT 1 FROM utilisateurs WHERE identifiant = $1', [identifiant]);
+      if (pris.rowCount) throw new ErreurHttp(409, 'Cet identifiant existe déjà. Choisissez-en un autre.');
+      const u = (await c.query<{ id: string }>(
+        `INSERT INTO utilisateurs (identifiant, nom, mot_de_passe_hash, derniere_connexion) VALUES ($1, $2, $3, $4) RETURNING id`,
+        [identifiant, nom, empreinte, maintenant()],
+      )).rows[0]!;
+      const o = (await c.query<{ id: string }>('INSERT INTO organisations (nom) VALUES ($1) RETURNING id', [b.nomElevage?.trim() || 'Mon élevage'])).rows[0]!;
+      await c.query(`INSERT INTO membres (organisation_id, utilisateur_id, role) VALUES ($1, $2, 'proprietaire')`, [o.id, u.id]);
+      const codesSecours = await creerCodesSecours(c, u.id);
+      const jeton = await ouvrirSession(c, u.id, b.appareil);
+      await journaliser(c, o.id, { id: u.id, identifiant, nom, fonction: null }, 'utilisateur', 'utilisateurs', identifiant, 'a créé le compte administrateur de l’élevage', maintenant().getTime());
+      return { jeton, utilisateur: { id: u.id, identifiant, nom, telephone: null }, codesSecours };
+    });
+    await oublierEchecs('__installation');
+    return { ...r, doitChanger: false, organisations: await organisationsDe(r.utilisateur.id) };
   });
+
+  /* ----- Connexion ----- */
 
   app.post('/v1/auth/connexion', {
     ...limiteAuth,
     schema: {
       body: {
-        type: 'object', required: ['telephone', 'code'], additionalProperties: false,
-        properties: { telephone: { type: 'string', maxLength: 30 }, code: { type: 'string', minLength: 6, maxLength: 6 }, appareil: { type: 'string', maxLength: 80 } },
+        type: 'object', required: ['identifiant', 'motDePasse'], additionalProperties: false,
+        properties: { identifiant: { type: 'string', maxLength: 60 }, motDePasse: { type: 'string', maxLength: 200 }, appareil: { type: 'string', maxLength: 80 } },
       },
     },
   }, async (req) => {
-    const b = req.body as { telephone: string; code: string; appareil?: string };
-    const telephone = normaliserTelephone(b.telephone);
-    if (!telephone) throw new ErreurHttp(400, 'Numéro de téléphone invalide.');
-    const now = maintenant();
-    const ligne = (await pool.query<{ code_hash: string; expire_le: Date; essais: number }>('SELECT code_hash, expire_le, essais FROM codes_connexion WHERE telephone = $1', [telephone])).rows[0];
-    const codeSms = ligne && ligne.expire_le > now;
-    if (codeSms && ligne.essais >= MAX_ESSAIS_CODE) throw new ErreurHttp(429, 'Trop d’essais. Demandez un nouveau code.');
-    const smsBon = codeSms && egaux(ligne.code_hash, empreinteCode(config.secret, telephone, b.code));
-
-    // Sinon, le code a pu être donné par l'administrateur de l'élevage (invitation) : il sert une seule fois.
-    let invitation: { organisation_id: string } | undefined;
-    if (!smsBon) {
-      const invitations = (await pool.query<{ organisation_id: string; invitation_hash: string; invitation_essais: number }>(
-        'SELECT organisation_id, invitation_hash, invitation_essais FROM membres WHERE telephone = $1 AND invitation_hash IS NOT NULL AND invitation_expire > $2',
-        [telephone, now],
-      )).rows;
-      if (invitations.some((i) => i.invitation_essais >= MAX_ESSAIS_INVITATION)) throw new ErreurHttp(429, 'Trop d’essais. Demandez un nouveau code à l’administrateur.');
-      invitation = invitations.find((i) => egaux(i.invitation_hash, empreinteCode(config.secret, `${telephone}|${i.organisation_id}`, b.code)));
-      if (!invitation) {
-        if (codeSms) await pool.query('UPDATE codes_connexion SET essais = essais + 1 WHERE telephone = $1', [telephone]);
-        if (invitations.length) await pool.query('UPDATE membres SET invitation_essais = invitation_essais + 1 WHERE telephone = $1 AND invitation_hash IS NOT NULL', [telephone]);
-        throw new ErreurHttp(400, 'Code invalide ou expiré. Demandez un nouveau code.');
-      }
+    const b = req.body as { identifiant: string; motDePasse: string; appareil?: string };
+    const identifiant = normaliserIdentifiant(b.identifiant);
+    await verifierBlocage(identifiant);
+    const ligne = (await pool.query<{ id: string; nom: string | null; telephone: string | null; mot_de_passe_hash: string | null; doit_changer: boolean; mot_de_passe_expire: Date | null }>(
+      'SELECT id, nom, telephone, mot_de_passe_hash, doit_changer, mot_de_passe_expire FROM utilisateurs WHERE identifiant = $1', [identifiant],
+    )).rows[0];
+    const empreinte = ligne?.mot_de_passe_hash ?? (await fausseEmpreinte());
+    const bon = await motDePasseJuste(b.motDePasse, empreinte, ligne?.doit_changer === true);
+    if (!ligne || !ligne.mot_de_passe_hash || !bon) {
+      await noterEchec(identifiant);
+      throw new ErreurHttp(401, MESSAGE_IDENTIFIANTS);
     }
-    const jeton = genererJeton();
-    const utilisateur = await transaction(pool, async (c) => {
-      if (smsBon) await c.query('DELETE FROM codes_connexion WHERE telephone = $1', [telephone]);
-      if (invitation) await c.query('UPDATE membres SET invitation_hash = NULL, invitation_expire = NULL, invitation_essais = 0 WHERE organisation_id = $1 AND telephone = $2', [invitation.organisation_id, telephone]);
-      const u = (await c.query<Utilisateur>(
-        `INSERT INTO utilisateurs (telephone) VALUES ($1) ON CONFLICT (telephone) DO UPDATE SET telephone = EXCLUDED.telephone RETURNING id, telephone, nom`,
-        [telephone],
-      )).rows[0]!;
-      await c.query('UPDATE membres SET utilisateur_id = $1 WHERE telephone = $2 AND utilisateur_id IS NULL', [u.id, telephone]);
-      const deja = await c.query('SELECT 1 FROM membres WHERE utilisateur_id = $1', [u.id]);
-      if (!deja.rowCount) {
-        const o = (await c.query<{ id: string }>('INSERT INTO organisations (nom) VALUES ($1) RETURNING id', ['Mon élevage'])).rows[0]!;
-        await c.query(`INSERT INTO membres (organisation_id, telephone, utilisateur_id, role) VALUES ($1, $2, $3, 'proprietaire')`, [o.id, telephone, u.id]);
-      }
-      await c.query('INSERT INTO sessions (jeton_hash, utilisateur_id, appareil, expire_le) VALUES ($1, $2, $3, $4)', [
-        empreinteJeton(jeton), u.id, b.appareil ?? null, new Date(now.getTime() + config.sessionJours * 86_400_000),
-      ]);
-      return u;
+    if (ligne.doit_changer && ligne.mot_de_passe_expire && ligne.mot_de_passe_expire <= maintenant()) {
+      throw new ErreurHttp(403, 'Ce mot de passe provisoire a expiré. Demandez-en un nouveau à votre administrateur.', 'provisoire_expire');
+    }
+    await oublierEchecs(identifiant);
+    const jeton = await ouvrirSession(pool, ligne.id, b.appareil);
+    await pool.query('UPDATE utilisateurs SET derniere_connexion = $2 WHERE id = $1', [ligne.id, maintenant()]);
+    return {
+      jeton, utilisateur: versUtilisateurPublic({ id: ligne.id, identifiant, nom: ligne.nom, telephone: ligne.telephone }),
+      doitChanger: ligne.doit_changer, organisations: await organisationsDe(ligne.id),
+    };
+  });
+
+  /** Mot de passe perdu par le propriétaire : un code de secours, noté sur papier à l'installation, permet d'en choisir un nouveau. */
+  app.post('/v1/auth/secours', {
+    ...limiteAuth,
+    schema: {
+      body: {
+        type: 'object', required: ['identifiant', 'code', 'nouveauMotDePasse'], additionalProperties: false,
+        properties: { identifiant: { type: 'string', maxLength: 60 }, code: { type: 'string', maxLength: 40 }, nouveauMotDePasse: { type: 'string', maxLength: 200 } },
+      },
+    },
+  }, async (req) => {
+    const b = req.body as { identifiant: string; code: string; nouveauMotDePasse: string };
+    const identifiant = normaliserIdentifiant(b.identifiant);
+    await verifierBlocage(identifiant);
+    const probleme = problemeMotDePasse(b.nouveauMotDePasse, identifiant);
+    if (probleme) throw new ErreurHttp(400, probleme);
+    const u = (await pool.query<{ id: string; nom: string | null; telephone: string | null }>('SELECT id, nom, telephone FROM utilisateurs WHERE identifiant = $1', [identifiant])).rows[0];
+    const code = u ? (await pool.query<{ id: string }>(
+      'SELECT id FROM codes_secours WHERE utilisateur_id = $1 AND utilise_le IS NULL AND code_hash = $2', [u.id, empreinteCodeSecours(config.secret, b.code)],
+    )).rows[0] : undefined;
+    if (!u || !code || normaliserCodeSecours(b.code).length < 8) {
+      await noterEchec(identifiant);
+      throw new ErreurHttp(401, 'Identifiant ou code de secours incorrect.');
+    }
+    const empreinte = await hacherMotDePasse(b.nouveauMotDePasse, config.coutMotDePasse);
+    const restants = await transaction(pool, async (c) => {
+      const pris = await c.query('UPDATE codes_secours SET utilise_le = $2 WHERE id = $1 AND utilise_le IS NULL', [code.id, maintenant()]);
+      if (!pris.rowCount) throw new ErreurHttp(401, 'Identifiant ou code de secours incorrect.');
+      await c.query('UPDATE utilisateurs SET mot_de_passe_hash = $2, doit_changer = false, mot_de_passe_expire = NULL WHERE id = $1', [u.id, empreinte]);
+      await c.query('DELETE FROM sessions WHERE utilisateur_id = $1', [u.id]);
+      await journaliserCompte(c, { id: u.id, identifiant, nom: u.nom, telephone: u.telephone, doitChanger: false }, 'a utilisé un code de secours pour choisir un nouveau mot de passe');
+      return Number((await c.query<{ n: string }>('SELECT count(*) AS n FROM codes_secours WHERE utilisateur_id = $1 AND utilise_le IS NULL', [u.id])).rows[0]!.n);
     });
-    return { jeton, utilisateur, organisations: await organisationsDe(utilisateur.id) };
+    await oublierEchecs(identifiant);
+    return { ok: true, codesRestants: restants };
   });
 
   app.post('/v1/auth/deconnexion', async (req) => {
-    await authentifier(req);
+    await authentifier(req, { permissif: true });
     const jeton = (req.headers.authorization ?? '').slice(7).trim();
     await pool.query('DELETE FROM sessions WHERE jeton_hash = $1', [empreinteJeton(jeton)]);
     return { ok: true };
   });
 
   app.get('/v1/moi', async (req) => {
-    const u = await authentifier(req);
-    return { utilisateur: u, organisations: await organisationsDe(u.id) };
+    const u = await authentifier(req, { permissif: true });
+    const secours = (await pool.query<{ n: string }>('SELECT count(*) AS n FROM codes_secours WHERE utilisateur_id = $1 AND utilise_le IS NULL', [u.id])).rows[0]!;
+    return { utilisateur: { ...versUtilisateurPublic(u), doitChanger: u.doitChanger }, organisations: await organisationsDe(u.id), codesSecoursRestants: Number(secours.n) };
   });
 
-  app.patch('/v1/moi', { schema: { body: { type: 'object', required: ['nom'], properties: { nom: { type: 'string', maxLength: 80 } }, additionalProperties: false } } }, async (req) => {
+  app.patch('/v1/moi', {
+    schema: { body: { type: 'object', additionalProperties: false, properties: { nom: { type: 'string', maxLength: 80 }, telephone: { type: 'string', maxLength: 30 } } } },
+  }, async (req) => {
     const u = await authentifier(req);
-    const nom = (req.body as { nom: string }).nom.trim();
-    await pool.query('UPDATE utilisateurs SET nom = $1 WHERE id = $2', [nom || null, u.id]);
+    const b = req.body as { nom?: string; telephone?: string };
+    if (b.nom !== undefined) await pool.query('UPDATE utilisateurs SET nom = $1 WHERE id = $2', [b.nom.trim() || null, u.id]);
+    if (b.telephone !== undefined) {
+      const tel = b.telephone.trim() ? normaliserTelephone(b.telephone) : null;
+      if (b.telephone.trim() && !tel) throw new ErreurHttp(400, 'Numéro de téléphone invalide. Exemple : 77 123 45 67.');
+      await pool.query('UPDATE utilisateurs SET telephone = $1 WHERE id = $2', [tel, u.id]);
+    }
     return { ok: true };
+  });
+
+  /** Changer son mot de passe : indispensable après un mot de passe provisoire, possible à tout moment ensuite. Les autres appareils sont déconnectés. */
+  app.post('/v1/moi/mot-de-passe', {
+    ...limiteAuth,
+    schema: { body: { type: 'object', required: ['ancien', 'nouveau'], additionalProperties: false, properties: { ancien: { type: 'string', maxLength: 200 }, nouveau: { type: 'string', maxLength: 200 } } } },
+  }, async (req) => {
+    const u = await authentifier(req, { permissif: true });
+    const b = req.body as { ancien: string; nouveau: string };
+    await verifierBlocage(u.identifiant);
+    const ligne = (await pool.query<{ mot_de_passe_hash: string }>('SELECT mot_de_passe_hash FROM utilisateurs WHERE id = $1', [u.id])).rows[0];
+    if (!ligne || !(await motDePasseJuste(b.ancien, ligne.mot_de_passe_hash, u.doitChanger))) {
+      await noterEchec(u.identifiant);
+      throw new ErreurHttp(400, 'Le mot de passe actuel est incorrect.');
+    }
+    const probleme = problemeMotDePasse(b.nouveau, u.identifiant);
+    if (probleme) throw new ErreurHttp(400, probleme);
+    if (b.nouveau === b.ancien) throw new ErreurHttp(400, 'Choisissez un mot de passe différent de l’actuel.');
+    const empreinte = await hacherMotDePasse(b.nouveau, config.coutMotDePasse);
+    const jeton = (req.headers.authorization ?? '').slice(7).trim();
+    await transaction(pool, async (c) => {
+      await c.query('UPDATE utilisateurs SET mot_de_passe_hash = $2, doit_changer = false, mot_de_passe_expire = NULL WHERE id = $1', [u.id, empreinte]);
+      await c.query('DELETE FROM sessions WHERE utilisateur_id = $1 AND jeton_hash <> $2', [u.id, empreinteJeton(jeton)]);
+      await journaliserCompte(c, u, u.doitChanger ? 'a choisi son mot de passe personnel' : 'a changé son mot de passe');
+    });
+    await oublierEchecs(u.identifiant);
+    return { ok: true };
+  });
+
+  /** Nouveaux codes de secours du propriétaire (les anciens cessent de fonctionner). Demande le mot de passe. */
+  app.post('/v1/moi/codes-secours', {
+    ...limiteAuth,
+    schema: { body: { type: 'object', required: ['motDePasse'], additionalProperties: false, properties: { motDePasse: { type: 'string', maxLength: 200 } } } },
+  }, async (req) => {
+    const u = await authentifier(req);
+    await verifierBlocage(u.identifiant);
+    const proprietaire = await pool.query(`SELECT 1 FROM membres WHERE utilisateur_id = $1 AND role = 'proprietaire'`, [u.id]);
+    if (!proprietaire.rowCount) throw new ErreurHttp(403, 'Seul le propriétaire a des codes de secours.');
+    const ligne = (await pool.query<{ mot_de_passe_hash: string }>('SELECT mot_de_passe_hash FROM utilisateurs WHERE id = $1', [u.id])).rows[0];
+    if (!ligne || !(await verifierMotDePasse((req.body as { motDePasse: string }).motDePasse, ligne.mot_de_passe_hash))) {
+      await noterEchec(u.identifiant);
+      throw new ErreurHttp(400, 'Mot de passe incorrect.');
+    }
+    const codesSecours = await transaction(pool, async (c) => {
+      const codes = await creerCodesSecours(c, u.id);
+      await journaliserCompte(c, u, 'a généré de nouveaux codes de secours');
+      return codes;
+    });
+    await oublierEchecs(u.identifiant);
+    return { codesSecours };
   });
 
   /* ---------- Organisations et membres ---------- */
 
   const paramsOrg = { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } } as const;
+  const paramsMembre = { params: { type: 'object', required: ['id', 'identifiant'], properties: { id: { type: 'string', format: 'uuid' }, identifiant: { type: 'string', maxLength: 60 } } } } as const;
 
   app.patch('/v1/organisations/:id', {
     schema: { ...paramsOrg, body: { type: 'object', required: ['nom'], properties: { nom: { type: 'string', minLength: 1, maxLength: 80 } }, additionalProperties: false } },
@@ -251,153 +435,241 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  type EtatCompte = 'actif' | 'provisoire' | 'expire';
+
   interface MembreListe {
-    telephone: string;
-    role: RoleMembre;
+    identifiant: string;
     nom: string | null;
+    telephone: string | null;
+    role: RoleMembre;
     fonction: string | null;
     droits: string[];
     zones: string[];
-    actif: boolean;
-    invitationEnCours: boolean;
+    /** `provisoire` : mot de passe donné, pas encore remplacé ; `expire` : il n'est plus valable, il faut en redonner un. */
+    etat: EtatCompte;
+    derniereConnexion: string | null;
   }
 
   app.get('/v1/organisations/:id/membres', { schema: paramsOrg }, async (req) => {
     const u = await authentifier(req);
     const { id } = req.params as { id: string };
     await exigerDroit(id, u.id, 'admin.utilisateurs', 'Seuls les administrateurs voient la liste des utilisateurs.');
-    const r = await pool.query<LigneMembre & { telephone: string; nom_affiche: string | null; nom: string | null; actif: boolean; invitation: boolean }>(
-      `SELECT m.telephone, m.role, m.fonction, m.droits, m.zones, COALESCE(us.nom, m.nom_affiche) AS nom, (m.utilisateur_id IS NOT NULL) AS actif,
-              (m.invitation_hash IS NOT NULL AND m.invitation_expire > now()) AS invitation
-       FROM membres m LEFT JOIN utilisateurs us ON us.id = m.utilisateur_id
+    const r = await pool.query<LigneMembre & { identifiant: string; nom: string | null; telephone: string | null; doit_changer: boolean; mot_de_passe_expire: Date | null; derniere_connexion: Date | null }>(
+      `SELECT us.identifiant, us.nom, us.telephone, m.role, m.fonction, m.droits, m.zones, us.doit_changer, us.mot_de_passe_expire, us.derniere_connexion
+       FROM membres m JOIN utilisateurs us ON us.id = m.utilisateur_id
        WHERE m.organisation_id = $1 ORDER BY (m.role = 'proprietaire') DESC, m.cree_le`,
       [id],
     );
+    const now = maintenant();
     const membres: MembreListe[] = r.rows.map((x) => ({
-      telephone: x.telephone, role: x.role, nom: x.nom, fonction: x.fonction, droits: droitsEffectifs(x.role, x.droits), zones: x.zones ?? [], actif: x.actif, invitationEnCours: x.invitation,
+      identifiant: x.identifiant, nom: x.nom, telephone: x.telephone, role: x.role, fonction: x.fonction, droits: droitsEffectifs(x.role, x.droits), zones: x.zones ?? [],
+      etat: x.doit_changer ? (x.mot_de_passe_expire && x.mot_de_passe_expire <= now ? 'expire' : 'provisoire') : 'actif',
+      derniereConnexion: x.derniere_connexion?.toISOString() ?? null,
     }));
     return { membres };
   });
 
-  /** Crée ou modifie une personne : profil de départ, droits cochés un par un, zones. Renvoie un code de connexion tant qu'elle ne s'est pas connectée. */
+  /** Droits et zones demandés pour une fiche, avec les garde-fous : seul le propriétaire confie la gestion des utilisateurs. */
+  async function resoudreDroits(
+    organisationId: string, acteur: Utilisateur,
+    b: { role?: RoleMembre; droits?: string[]; zones?: string[] },
+    existant?: { role: RoleMembre; droits: string[] | null; zones: string[] },
+  ): Promise<{ role: RoleMembre; droits: string[]; zones: string[] }> {
+    if (!existant && !b.role && !b.droits) throw new ErreurHttp(400, 'Choisissez un profil ou cochez des droits.');
+    const role: RoleMembre = b.role ?? (b.droits ? 'personnalise' : existant!.role);
+    const droits = nettoyerDroits(b.droits ?? (b.role ? droitsDuProfil(b.role) : droitsEffectifs(existant!.role, existant!.droits)));
+    const moi = await membreDans(organisationId, acteur.id);
+    // Sinon un gérant pourrait s'accorder tous les droits.
+    if (droits.includes('admin.utilisateurs') && moi.role !== 'proprietaire') throw new ErreurHttp(403, 'Seul le propriétaire peut donner le droit de gérer les utilisateurs.');
+    return { role, droits, zones: [...new Set((b.zones ?? existant?.zones ?? []).filter(Boolean))] };
+  }
+
+  const descriptionDroits = (role: RoleMembre, droits: string[], zones: string[]) =>
+    `profil ${LIBELLES_PROFILS[role].toLowerCase()}, ${droits.length} fonction${droits.length > 1 ? 's' : ''}${zones.length ? `, ${zones.length} bâtiment${zones.length > 1 ? 's' : ''}` : ''}`;
+
+  const schemaDroits = {
+    role: { type: 'string', enum: PROFILS_ASSIGNABLES },
+    fonction: { type: 'string', maxLength: 80 },
+    telephone: { type: 'string', maxLength: 30 },
+    droits: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 60 } },
+    zones: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 100 } },
+  } as const;
+
+  const telephoneFacultatif = (brut: string | undefined): string | null => {
+    if (!brut?.trim()) return null;
+    const tel = normaliserTelephone(brut);
+    if (!tel) throw new ErreurHttp(400, 'Numéro de téléphone invalide. Exemple : 77 123 45 67.');
+    return tel;
+  };
+
+  /**
+   * Ajoute une personne : le serveur crée son identifiant (nom.prénom) et un mot de passe provisoire propre à elle, montré une seule fois à l'administrateur.
+   * La personne devra en choisir un autre dès sa première connexion, avant l'expiration du provisoire.
+   */
   app.post('/v1/organisations/:id/membres', {
     schema: {
       ...paramsOrg,
       body: {
-        type: 'object', required: ['telephone'], additionalProperties: false,
-        properties: {
-          telephone: { type: 'string', maxLength: 30 },
-          role: { type: 'string', enum: PROFILS_ASSIGNABLES },
-          nom: { type: 'string', maxLength: 80 },
-          fonction: { type: 'string', maxLength: 80 },
-          droits: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 60 } },
-          zones: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 100 } },
-          nouveauCode: { type: 'boolean' },
-        },
+        type: 'object', required: ['prenom', 'nom'], additionalProperties: false,
+        properties: { prenom: { type: 'string', minLength: 1, maxLength: 60 }, nom: { type: 'string', minLength: 1, maxLength: 60 }, ...schemaDroits },
       },
     },
   }, async (req) => {
     const u = await authentifier(req);
     const { id } = req.params as { id: string };
     await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de gérer les utilisateurs.');
-    const b = req.body as { telephone: string; role?: RoleMembre; nom?: string; fonction?: string; droits?: string[]; zones?: string[]; nouveauCode?: boolean };
-    const telephone = normaliserTelephone(b.telephone);
-    if (!telephone) throw new ErreurHttp(400, 'Numéro de téléphone invalide. Exemple : 77 123 45 67.');
-    const existant = (await pool.query<LigneMembre & { utilisateur_id: string | null; nom_affiche: string | null }>(
-      'SELECT role, fonction, droits, zones, utilisateur_id, nom_affiche FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone],
-    )).rows[0];
-    if (existant?.role === 'proprietaire') throw new ErreurHttp(400, 'Les droits du propriétaire ne se modifient pas.');
-    if (!existant && !b.role && !b.droits) throw new ErreurHttp(400, 'Choisissez un profil ou cochez des droits.');
-    const role: RoleMembre = b.role ?? (b.droits ? 'personnalise' : existant!.role);
-    const droits = nettoyerDroits(b.droits ?? (b.role ? droitsDuProfil(b.role) : droitsEffectifs(existant!.role, existant!.droits)));
-    // Seul le propriétaire peut confier la gestion des utilisateurs : sinon un gérant pourrait s'accorder tous les droits.
-    const moi = await membreDans(id, u.id);
-    if (droits.includes('admin.utilisateurs') && moi.role !== 'proprietaire') throw new ErreurHttp(403, 'Seul le propriétaire peut donner le droit de gérer les utilisateurs.');
-    const zones = [...new Set((b.zones ?? existant?.zones ?? []).filter(Boolean))];
-    const nouveauCode = b.nouveauCode === true || !existant;
-    const code = nouveauCode ? genererCode() : null;
-    await pool.query(
-      `INSERT INTO membres (organisation_id, telephone, utilisateur_id, role, invite_par, nom_affiche, fonction, droits, zones, invitation_hash, invitation_expire, invitation_essais)
-       VALUES ($1, $2, (SELECT id FROM utilisateurs WHERE telephone = $2), $3, $4, $5, $6, $7, $8, $9, $10, 0)
-       ON CONFLICT (organisation_id, telephone) DO UPDATE SET
-         role = EXCLUDED.role, droits = EXCLUDED.droits, zones = EXCLUDED.zones,
-         nom_affiche = COALESCE(EXCLUDED.nom_affiche, membres.nom_affiche), fonction = COALESCE(EXCLUDED.fonction, membres.fonction),
-         invitation_hash = COALESCE(EXCLUDED.invitation_hash, membres.invitation_hash), invitation_expire = COALESCE(EXCLUDED.invitation_expire, membres.invitation_expire),
-         invitation_essais = CASE WHEN EXCLUDED.invitation_hash IS NULL THEN membres.invitation_essais ELSE 0 END`,
-      [
-        id, telephone, role, u.id, b.nom?.trim() || null, b.fonction?.trim() || null, droits, zones,
-        code ? empreinteCode(config.secret, `${telephone}|${id}`, code) : null,
-        code ? new Date(maintenant().getTime() + VALIDITE_INVITATION_JOURS * 86_400_000) : null,
-      ],
-    );
-    const nomCible = b.nom?.trim() || existant?.nom_affiche || telephone;
-    await journaliser(
-      pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', telephone,
-      `${existant ? 'a modifié les droits de' : 'a ajouté'} ${nomCible}${b.fonction?.trim() ? ` (${b.fonction.trim()})` : ''} · profil ${LIBELLES_PROFILS[role].toLowerCase()}, ${droits.length} fonction${droits.length > 1 ? 's' : ''}${zones.length ? `, ${zones.length} bâtiment${zones.length > 1 ? 's' : ''}` : ''}${code && existant ? ' · nouveau code de connexion' : ''}`,
-      maintenant().getTime(),
-    );
-    return { ok: true, telephone, role, ...(code ? { codeInvitation: code } : {}) };
+    const b = req.body as { prenom: string; nom: string; telephone?: string; fonction?: string; role?: RoleMembre; droits?: string[]; zones?: string[] };
+    const prenom = b.prenom.trim();
+    const nom = b.nom.trim();
+    const base = identifiantDepuisNom(prenom, nom);
+    if (problemeIdentifiant(base)) throw new ErreurHttp(400, 'Le nom et le prénom doivent contenir des lettres.');
+    const telephone = telephoneFacultatif(b.telephone);
+    const { role, droits, zones } = await resoudreDroits(id, u, b);
+    const motDePasseProvisoire = genererMotDePasseProvisoire();
+    const empreinte = await hacherMotDePasse(motDePasseProvisoire, config.coutMotDePasse);
+    const expire = new Date(maintenant().getTime() + MOT_DE_PASSE_PROVISOIRE_JOURS * JOUR_MS);
+    const nomAffiche = `${prenom} ${nom}`;
+    const acteur = await acteurDe(id, u);
+
+    const identifiant = await transaction(pool, async (c) => {
+      await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('identifiants', 0))`);
+      const proches = new Set((await c.query<{ identifiant: string }>(`SELECT identifiant FROM utilisateurs WHERE identifiant LIKE $1 || '%'`, [base])).rows.map((x) => x.identifiant));
+      const libre = identifiantLibre(base, (x) => proches.has(x));
+      const nouveau = (await c.query<{ id: string }>(
+        `INSERT INTO utilisateurs (identifiant, nom, telephone, mot_de_passe_hash, doit_changer, mot_de_passe_expire) VALUES ($1, $2, $3, $4, true, $5) RETURNING id`,
+        [libre, nomAffiche, telephone, empreinte, expire],
+      )).rows[0]!;
+      await c.query(
+        `INSERT INTO membres (organisation_id, utilisateur_id, role, invite_par, fonction, droits, zones) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, nouveau.id, role, u.id, b.fonction?.trim() || null, droits, zones],
+      );
+      await journaliser(
+        c, id, acteur, 'utilisateur', 'utilisateurs', libre,
+        `a ajouté ${nomAffiche}${b.fonction?.trim() ? ` (${b.fonction.trim()})` : ''} · identifiant ${libre}, ${descriptionDroits(role, droits, zones)}`, maintenant().getTime(),
+      );
+      return libre;
+    });
+    return { ok: true, identifiant, nom: nomAffiche, role, motDePasseProvisoire, expireLe: expire.toISOString() };
   });
 
-  app.delete('/v1/organisations/:id/membres/:telephone', {
-    schema: { params: { type: 'object', required: ['id', 'telephone'], properties: { id: { type: 'string', format: 'uuid' }, telephone: { type: 'string', maxLength: 30 } } } },
+  /** Cherche une personne de l'élevage par son identifiant. */
+  async function cibleDe(organisationId: string, brut: string) {
+    const identifiant = normaliserIdentifiant(brut);
+    const cible = (await pool.query<LigneMembre & { utilisateur_id: string; identifiant: string; nom: string | null }>(
+      `SELECT m.utilisateur_id, us.identifiant, us.nom, m.role, m.fonction, m.droits, m.zones FROM membres m JOIN utilisateurs us ON us.id = m.utilisateur_id
+       WHERE m.organisation_id = $1 AND us.identifiant = $2`,
+      [organisationId, identifiant],
+    )).rows[0];
+    if (!cible) throw new ErreurHttp(404, 'Cette personne ne fait pas partie de l’élevage.');
+    return cible;
+  }
+
+  /** Modifie une personne : nom, téléphone, fonction, profil, droits cochés, zones. */
+  app.patch('/v1/organisations/:id/membres/:identifiant', {
+    schema: {
+      ...paramsMembre,
+      body: { type: 'object', additionalProperties: false, properties: { nom: { type: 'string', minLength: 1, maxLength: 80 }, ...schemaDroits } },
+    },
   }, async (req) => {
     const u = await authentifier(req);
-    const { id, telephone: brut } = req.params as { id: string; telephone: string };
+    const { id, identifiant } = req.params as { id: string; identifiant: string };
+    await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de gérer les utilisateurs.');
+    const cible = await cibleDe(id, identifiant);
+    if (cible.role === 'proprietaire') throw new ErreurHttp(400, 'Les droits du propriétaire ne se modifient pas.');
+    if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas modifier vos propres droits.');
+    const b = req.body as { nom?: string; telephone?: string; fonction?: string; role?: RoleMembre; droits?: string[]; zones?: string[] };
+    const { role, droits, zones } = await resoudreDroits(id, u, b, cible);
+    const telephone = b.telephone === undefined ? undefined : telephoneFacultatif(b.telephone);
+    const fonction = b.fonction === undefined ? cible.fonction : b.fonction.trim() || null;
+    await transaction(pool, async (c) => {
+      await c.query('UPDATE membres SET role = $3, droits = $4, zones = $5, fonction = $6 WHERE organisation_id = $1 AND utilisateur_id = $2', [id, cible.utilisateur_id, role, droits, zones, fonction]);
+      if (b.nom !== undefined) await c.query('UPDATE utilisateurs SET nom = $2 WHERE id = $1', [cible.utilisateur_id, b.nom.trim()]);
+      if (telephone !== undefined) await c.query('UPDATE utilisateurs SET telephone = $2 WHERE id = $1', [cible.utilisateur_id, telephone]);
+    });
+    await journaliser(
+      pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', cible.identifiant,
+      `a modifié les droits de ${b.nom?.trim() || cible.nom || cible.identifiant}${fonction ? ` (${fonction})` : ''} · ${descriptionDroits(role, droits, zones)}`, maintenant().getTime(),
+    );
+    return { ok: true, identifiant: cible.identifiant, role };
+  });
+
+  /** Nouveau mot de passe provisoire (oubli, mot de passe perdu ou expiré). Les appareils de la personne sont déconnectés. L'administrateur ne voit jamais le vrai mot de passe. */
+  app.post('/v1/organisations/:id/membres/:identifiant/mot-de-passe', { ...limiteAuth, schema: { ...paramsMembre } }, async (req) => {
+    const u = await authentifier(req);
+    const { id, identifiant } = req.params as { id: string; identifiant: string };
+    const moi = await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de réinitialiser des mots de passe.');
+    const cible = await cibleDe(id, identifiant);
+    if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Pour changer votre propre mot de passe, utilisez « Compte ».');
+    if (cible.role === 'proprietaire') throw new ErreurHttp(403, 'Le mot de passe du propriétaire ne se réinitialise pas ici : il utilise ses codes de secours.');
+    if (moi.role !== 'proprietaire' && aDroit(droitsEffectifs(cible.role, cible.droits), 'admin.utilisateurs')) {
+      throw new ErreurHttp(403, 'Seul le propriétaire peut réinitialiser le mot de passe d’une personne qui gère les utilisateurs.');
+    }
+    const motDePasseProvisoire = genererMotDePasseProvisoire();
+    const empreinte = await hacherMotDePasse(motDePasseProvisoire, config.coutMotDePasse);
+    const expire = new Date(maintenant().getTime() + MOT_DE_PASSE_PROVISOIRE_JOURS * JOUR_MS);
+    await transaction(pool, async (c) => {
+      await c.query('UPDATE utilisateurs SET mot_de_passe_hash = $2, doit_changer = true, mot_de_passe_expire = $3 WHERE id = $1', [cible.utilisateur_id, empreinte, expire]);
+      await c.query('DELETE FROM sessions WHERE utilisateur_id = $1', [cible.utilisateur_id]);
+      await c.query('DELETE FROM echecs_connexion WHERE cle = $1', [cible.identifiant]);
+    });
+    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', cible.identifiant, `a réinitialisé le mot de passe de ${cible.nom ?? cible.identifiant}`, maintenant().getTime());
+    return { ok: true, identifiant: cible.identifiant, nom: cible.nom, motDePasseProvisoire, expireLe: expire.toISOString() };
+  });
+
+  app.delete('/v1/organisations/:id/membres/:identifiant', { schema: paramsMembre }, async (req) => {
+    const u = await authentifier(req);
+    const { id, identifiant } = req.params as { id: string; identifiant: string };
     await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de retirer des personnes.');
-    const telephone = normaliserTelephone(decodeURIComponent(brut));
-    if (!telephone) throw new ErreurHttp(400, 'Numéro de téléphone invalide.');
-    const cible = (await pool.query<{ role: RoleMembre; utilisateur_id: string | null }>('SELECT role, utilisateur_id FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone])).rows[0];
-    if (!cible) throw new ErreurHttp(404, 'Cette personne ne fait pas partie de l’élevage.');
+    const cible = await cibleDe(id, identifiant);
     if (cible.role === 'proprietaire') throw new ErreurHttp(400, 'Le propriétaire ne peut pas être retiré.');
-    await pool.query('DELETE FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone]);
-    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', telephone, `a retiré ${telephone} de l’élevage`, maintenant().getTime());
+    if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas vous retirer vous-même.');
+    await transaction(pool, async (c) => {
+      await c.query('DELETE FROM membres WHERE organisation_id = $1 AND utilisateur_id = $2', [id, cible.utilisateur_id]);
+      // Une personne qui n'appartient plus à aucun élevage n'a plus de raison d'avoir un compte : son identifiant redevient libre.
+      await c.query('DELETE FROM utilisateurs u WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM membres m WHERE m.utilisateur_id = u.id)', [cible.utilisateur_id]);
+    });
+    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', cible.identifiant, `a retiré ${cible.nom ?? cible.identifiant} de l’élevage`, maintenant().getTime());
     return { ok: true };
   });
 
-  /** Déconnecte tous les appareils d'une personne (téléphone perdu, employé parti). Elle devra se reconnecter avec un nouveau code. */
-  app.post('/v1/organisations/:id/membres/:telephone/deconnexion', {
-    schema: { params: { type: 'object', required: ['id', 'telephone'], properties: { id: { type: 'string', format: 'uuid' }, telephone: { type: 'string', maxLength: 30 } } } },
-  }, async (req) => {
+  /** Déconnecte tous les appareils d'une personne (téléphone perdu, employé parti). Elle devra se reconnecter avec son mot de passe. */
+  app.post('/v1/organisations/:id/membres/:identifiant/deconnexion', { schema: paramsMembre }, async (req) => {
     const u = await authentifier(req);
-    const { id, telephone: brut } = req.params as { id: string; telephone: string };
+    const { id, identifiant } = req.params as { id: string; identifiant: string };
     await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de déconnecter des personnes.');
-    const telephone = normaliserTelephone(decodeURIComponent(brut));
-    if (!telephone) throw new ErreurHttp(400, 'Numéro de téléphone invalide.');
-    const cible = (await pool.query<{ role: RoleMembre; utilisateur_id: string | null }>('SELECT role, utilisateur_id FROM membres WHERE organisation_id = $1 AND telephone = $2', [id, telephone])).rows[0];
-    if (!cible) throw new ErreurHttp(404, 'Cette personne ne fait pas partie de l’élevage.');
-    if (cible.role === 'proprietaire' && cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas vous déconnecter vous-même ici.');
-    const r = cible.utilisateur_id ? await pool.query('DELETE FROM sessions WHERE utilisateur_id = $1', [cible.utilisateur_id]) : { rowCount: 0 };
-    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', telephone, `a déconnecté les appareils de ${telephone}`, maintenant().getTime());
+    const cible = await cibleDe(id, identifiant);
+    if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas vous déconnecter vous-même ici.');
+    const r = await pool.query('DELETE FROM sessions WHERE utilisateur_id = $1', [cible.utilisateur_id]);
+    await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', cible.identifiant, `a déconnecté les appareils de ${cible.nom ?? cible.identifiant}`, maintenant().getTime());
     return { ok: true, appareils: r.rowCount ?? 0 };
   });
 
-  /* ---------- Journal d'activité ---------- */
+/* ---------- Journal d'activité ---------- */
 
   app.get('/v1/organisations/:id/journal', {
     schema: {
       ...paramsOrg,
       querystring: {
         type: 'object', additionalProperties: false,
-        properties: { avant: { type: 'integer', minimum: 1 }, limite: { type: 'integer', minimum: 1, maximum: 200 }, telephone: { type: 'string', maxLength: 30 }, table: { type: 'string', maxLength: 40 } },
+        properties: { avant: { type: 'integer', minimum: 1 }, limite: { type: 'integer', minimum: 1, maximum: 200 }, identifiant: { type: 'string', maxLength: 60 }, table: { type: 'string', maxLength: 40 } },
       },
     },
   }, async (req) => {
     const u = await authentifier(req);
     const { id } = req.params as { id: string };
     await exigerDroit(id, u.id, 'admin.journal', 'Vous n’avez pas le droit de consulter le journal d’activité.');
-    const q = req.query as { avant?: number; limite?: number; telephone?: string; table?: string };
+    const q = req.query as { avant?: number; limite?: number; identifiant?: string; table?: string };
     const limite = q.limite ?? 50;
-    const tel = q.telephone ? normaliserTelephone(q.telephone) : null;
-    const r = await pool.query<{ id: string; fait_le: string; recu_le: Date; telephone: string; nom: string | null; fonction: string | null; action: ActionJournal; table_nom: string; enregistrement_id: string; description: string }>(
-      `SELECT id, fait_le, recu_le, telephone, nom, fonction, action, table_nom, enregistrement_id, description FROM journal
-       WHERE organisation_id = $1 AND ($2::bigint IS NULL OR id < $2) AND ($3::text IS NULL OR telephone = $3) AND ($4::text IS NULL OR table_nom = $4)
+    const qui = q.identifiant ? normaliserIdentifiant(q.identifiant) : null;
+    const r = await pool.query<{ id: string; fait_le: string; recu_le: Date; identifiant: string; nom: string | null; fonction: string | null; action: ActionJournal; table_nom: string; enregistrement_id: string; description: string }>(
+      `SELECT id, fait_le, recu_le, identifiant, nom, fonction, action, table_nom, enregistrement_id, description FROM journal
+       WHERE organisation_id = $1 AND ($2::bigint IS NULL OR id < $2) AND ($3::text IS NULL OR identifiant = $3) AND ($4::text IS NULL OR table_nom = $4)
        ORDER BY id DESC LIMIT $5`,
-      [id, q.avant ?? null, tel, q.table ?? null, limite + 1],
+      [id, q.avant ?? null, qui, q.table ?? null, limite + 1],
     );
     const lignes = r.rows.slice(0, limite);
     const entrees: EntreeJournal[] = lignes.map((x) => ({
-      id: Number(x.id), faitLe: Number(x.fait_le), recuLe: x.recu_le.toISOString(), telephone: x.telephone, nom: x.nom, fonction: x.fonction, action: x.action, table: x.table_nom, enregistrementId: x.enregistrement_id, description: x.description,
+      id: Number(x.id), faitLe: Number(x.fait_le), recuLe: x.recu_le.toISOString(), identifiant: x.identifiant, nom: x.nom, fonction: x.fonction, action: x.action, table: x.table_nom, enregistrementId: x.enregistrement_id, description: x.description,
     }));
     return { entrees, reste: r.rows.length > limite };
   });

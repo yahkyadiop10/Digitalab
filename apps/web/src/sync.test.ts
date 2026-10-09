@@ -42,7 +42,7 @@ let n = 0;
 async function appareil(serveur: ReturnType<typeof fauxServeur>, role: RoleMembre = 'proprietaire') {
   const base = new BaseElevage(`sync-${++n}`);
   const synchro = creerSynchro(base, serveur.fetch);
-  await synchro.lier('http://serveur.test', 'jeton', '+221771234567', { id: 'org-1', nom: 'Ferme test', role, droits: droitsEffectifs(role, null), zones: [] });
+  await synchro.lier('http://serveur.test', 'jeton', 'ndiaye.moussa', { id: 'org-1', nom: 'Ferme test', role, droits: droitsEffectifs(role, null), zones: [] });
   return { base, repo: creerRepo(base), synchro };
 }
 
@@ -247,7 +247,7 @@ describe('appareil relié à un compte', () => {
     await a.synchro.deconnecter({ auto: true });
     expect((await a.base.appareil.get('deconnecteAuto'))?.valeur).toBe(true);
     expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ nonEnvoyes: 1 });
-    await a.synchro.lier('http://serveur.test', 'jeton2', '+221771234567', org('org-1'));
+    await a.synchro.lier('http://serveur.test', 'jeton2', 'ndiaye.moussa', org('org-1'));
     expect((await a.base.appareil.get('deconnecteAuto'))).toBeUndefined();
     expect(await a.base.logements.count()).toBe(1);
     await a.synchro.synchroniser();
@@ -259,12 +259,12 @@ describe('appareil relié à un compte', () => {
     const a = await appareil(serveur);
     await a.repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: 10 });
     await a.synchro.deconnecter();
-    await expect(a.synchro.lier('http://serveur.test', 'j', '+221779999999', org('org-1', 'soigneur'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
-    await expect(a.synchro.lier('http://serveur.test', 'j', '+221771234567', org('org-2'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
+    await expect(a.synchro.lier('http://serveur.test', 'j', 'autre.personne', org('org-1', 'soigneur'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
+    await expect(a.synchro.lier('http://serveur.test', 'j', 'ndiaye.moussa', org('org-2'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
     expect(await a.base.logements.count()).toBe(1);
-    await a.synchro.lier('http://serveur.test', 'j', '+221779999999', org('org-1', 'soigneur'), { effacer: true });
+    await a.synchro.lier('http://serveur.test', 'j', 'autre.personne', org('org-1', 'soigneur'), { effacer: true });
     expect(await a.base.logements.count()).toBe(0);
-    expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ telephone: '+221779999999' });
+    expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ identifiant: 'autre.personne' });
   });
 
   it('prévient du nombre de saisies jamais envoyées avant d’effacer', async () => {
@@ -285,5 +285,83 @@ describe('appareil relié à un compte', () => {
     await a.synchro.effacerAppareil();
     expect(await a.base.appareil.count()).toBe(0);
     expect(await a.base.connexion.count()).toBe(0);
+  });
+});
+
+describe('comptes : identifiant et mot de passe', () => {
+  /** Enregistre les appels et renvoie des réponses prévues. */
+  interface Refus { statut: number; erreur: string }
+  function appelsFictifs(reponses: Record<string, unknown>) {
+    const vus: { chemin: string; methode: string; corps: Record<string, unknown>; autorisation: string | null }[] = [];
+    const f: Fetch = async (entree, init) => {
+      const chemin = new URL(String(entree)).pathname;
+      const methode = (init?.method ?? 'GET').toUpperCase();
+      vus.push({ chemin, methode, corps: init?.body ? JSON.parse(String(init.body)) : {}, autorisation: new Headers(init?.headers).get('authorization') });
+      const r = reponses[`${methode} ${chemin}`];
+      if (r && typeof r === 'object' && 'statut' in r) {
+        const refus = r as Refus;
+        return new Response(JSON.stringify({ erreur: refus.erreur }), { status: refus.statut });
+      }
+      return new Response(JSON.stringify(r ?? { ok: true }), { status: 200 });
+    };
+    return { f, vus };
+  }
+  const synchroAvec = (f: Fetch) => creerSynchro(new BaseElevage(`comptes-${++n}`), f);
+  const org = { id: 'org-1', nom: 'Ferme test', role: 'soigneur', droits: [], zones: [] };
+
+  it('se connecte avec l’identifiant (sans espaces autour) et le mot de passe, sans rien envoyer d’autre', async () => {
+    const { f, vus } = appelsFictifs({ 'POST /v1/auth/connexion': { jeton: 'j1', utilisateur: { identifiant: 'ndiaye.moussa', nom: 'Moussa Ndiaye' }, doitChanger: true, organisations: [org] } });
+    const s = await synchroAvec(f).seConnecter('http://serveur.test', '  ndiaye.moussa ', 'k7mq-x9pt-4tnw');
+    expect(s).toMatchObject({ jeton: 'j1', identifiant: 'ndiaye.moussa', doitChanger: true });
+    expect(vus[0]!.corps).toMatchObject({ identifiant: 'ndiaye.moussa', motDePasse: 'k7mq-x9pt-4tnw' });
+    expect(Object.keys(vus[0]!.corps).sort()).toEqual(['appareil', 'identifiant', 'motDePasse']);
+  });
+
+  it('remonte le message du serveur quand les identifiants sont faux', async () => {
+    const { f } = appelsFictifs({ 'POST /v1/auth/connexion': { statut: 401, erreur: 'Identifiant ou mot de passe incorrect.' } });
+    await expect(synchroAvec(f).seConnecter('http://serveur.test', 'x', 'y')).rejects.toMatchObject({ statut: 401, message: 'Identifiant ou mot de passe incorrect.' });
+  });
+
+  it('choisit son mot de passe avec la session reçue, pas avec celle de l’appareil', async () => {
+    const { f, vus } = appelsFictifs({});
+    await synchroAvec(f).choisirMotDePasse('http://serveur.test', 'jeton-provisoire', 'k7mq-x9pt-4tnw', 'Mon-Nouveau-Mot-2');
+    expect(vus[0]).toMatchObject({ chemin: '/v1/moi/mot-de-passe', methode: 'POST', autorisation: 'Bearer jeton-provisoire', corps: { ancien: 'k7mq-x9pt-4tnw', nouveau: 'Mon-Nouveau-Mot-2' } });
+  });
+
+  it('crée l’administrateur au premier lancement et rend les codes de secours', async () => {
+    const { f, vus } = appelsFictifs({
+      'GET /v1/installation': { aInitialiser: true, cleRequise: true },
+      'POST /v1/installation': { jeton: 'j0', utilisateur: { identifiant: 'admin', nom: 'Aminata' }, doitChanger: false, organisations: [{ ...org, role: 'proprietaire' }], codesSecours: ['aaaa-bbbb-cccc'] },
+    });
+    const s = synchroAvec(f);
+    expect(await s.etatInstallation('http://serveur.test')).toEqual({ aInitialiser: true, cleRequise: true });
+    const r = await s.installer('http://serveur.test', { cle: 'k7mq-x9pt', identifiant: 'admin', motDePasse: 'Poule-Pondeuse-7', nom: 'Aminata', nomElevage: 'Ferme Sow' });
+    expect(r).toMatchObject({ jeton: 'j0', identifiant: 'admin', codesSecours: ['aaaa-bbbb-cccc'] });
+    expect(vus[1]!.corps).toMatchObject({ cle: 'k7mq-x9pt', identifiant: 'admin', nomElevage: 'Ferme Sow' });
+  });
+
+  it('une fois relié, l’administrateur ajoute une personne et obtient son mot de passe provisoire', async () => {
+    const { f, vus } = appelsFictifs({
+      'POST /v1/organisations/org-1/membres': { ok: true, identifiant: 'sow.awa', nom: 'Awa Sow', motDePasseProvisoire: 'k7mq-x9pt-4tnw', expireLe: '2026-10-13T10:00:00.000Z' },
+      'POST /v1/organisations/org-1/membres/sow.awa/mot-de-passe': { ok: true, identifiant: 'sow.awa', nom: 'Awa Sow', motDePasseProvisoire: 'ccdd-eeff-ghjk', expireLe: '2026-10-13T10:00:00.000Z' },
+    });
+    const s = synchroAvec(f);
+    await s.lier('http://serveur.test', 'jeton', 'admin', { id: 'org-1', nom: 'Ferme test', role: 'proprietaire', droits: droitsEffectifs('proprietaire', null), zones: [] });
+    const cree = await s.ajouterMembre({ prenom: 'Awa', nom: 'Sow', role: 'soigneur' });
+    expect(cree).toMatchObject({ identifiant: 'sow.awa', motDePasseProvisoire: 'k7mq-x9pt-4tnw' });
+    expect(vus.at(-1)).toMatchObject({ autorisation: 'Bearer jeton', corps: { prenom: 'Awa', nom: 'Sow', role: 'soigneur' } });
+    expect((await s.reinitialiserMotDePasse('sow.awa')).motDePasseProvisoire).toBe('ccdd-eeff-ghjk');
+    await s.modifierMembre('sow.awa', { fonction: 'Aide' });
+    expect(vus.at(-1)).toMatchObject({ chemin: '/v1/organisations/org-1/membres/sow.awa', methode: 'PATCH', corps: { fonction: 'Aide' } });
+  });
+
+  it('mémorise l’identifiant (et non un numéro) comme propriétaire de l’appareil à la déconnexion', async () => {
+    const { f } = appelsFictifs({});
+    const base = new BaseElevage(`comptes-${++n}`);
+    const s = creerSynchro(base, f);
+    await s.lier('http://serveur.test', 'jeton', 'sow.awa', { id: 'org-1', nom: 'Ferme test', role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
+    await s.deconnecter();
+    expect((await base.appareil.get('proprietaire'))?.valeur).toMatchObject({ identifiant: 'sow.awa', organisationId: 'org-1' });
+    expect((await base.connexion.get('serveur'))).toBeUndefined();
   });
 });

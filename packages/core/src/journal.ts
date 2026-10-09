@@ -9,7 +9,8 @@ export interface EntreeJournal {
   faitLe: number;
   /** Instant (ISO) où le serveur l'a reçue ; il peut être bien plus tard si elle travaillait sans réseau. */
   recuLe: string;
-  telephone: string;
+  /** Identifiant de la personne (stable même si elle change de nom). */
+  identifiant: string;
   nom: string | null;
   fonction: string | null;
   action: ActionJournal;

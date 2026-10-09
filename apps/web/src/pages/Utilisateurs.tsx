@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import {
-  DESCRIPTIONS_PROFILS, LIBELLES_PROFILS, MODULES, PROFILS_ASSIGNABLES, basculerModule, droitsDuProfil, etatModule, nettoyerDroits, normaliserTelephone,
+  DESCRIPTIONS_PROFILS, LIBELLES_PROFILS, MODULES, PROFILS_ASSIGNABLES, basculerModule, droitsDuProfil, etatModule, identifiantDepuisNom, nettoyerDroits, normaliserTelephone,
   type RoleMembre,
 } from '@digitalab/core';
 import { Champ, Retour, useNotifier, useConfirmer } from '../components/ui';
-import { ErreurReseau, ErreurServeur, synchro, type Membre } from '../sync';
+import { MotDePasseProvisoire } from '../components/Comptes';
+import { ErreurReseau, ErreurServeur, synchro, type CompteProvisoire, type Membre } from '../sync';
 import { aller } from '../route';
 import { peut } from '../droits';
 import { useConnexion } from './Compte';
@@ -51,6 +52,12 @@ export function PageUtilisateurs({ elevage }: { elevage: Elevage }) {
   return <Acces elevage={elevage} enfant={<Liste />} />;
 }
 
+const ETAT_COMPTE: Record<Membre['etat'], string> = {
+  actif: '',
+  provisoire: ' · mot de passe provisoire pas encore changé',
+  expire: ' · mot de passe provisoire expiré : à réinitialiser',
+};
+
 function Liste() {
   const [membres, setMembres] = useState<Membre[] | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -61,19 +68,19 @@ function Liste() {
     <>
       <Retour vers="reglages" libelle="Réglages" />
       <h2>Gestion des utilisateurs</h2>
-      <p className="muet">Chaque personne a son propre téléphone et ne voit que ce que vous lui accordez.</p>
+      <p className="muet">Chaque personne se connecte avec son identifiant et son mot de passe, depuis son propre téléphone, et ne voit que ce que vous lui accordez.</p>
       {erreur && <p className="erreur" role="alert">{erreur}</p>}
       {membres === null && !erreur && <p className="muet">Chargement…</p>}
       {membres?.map((m) => (
-        <a key={m.telephone} className="carte ligne" href={m.role === 'proprietaire' ? undefined : `#/utilisateurs/${encodeURIComponent(m.telephone)}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+        <a key={m.identifiant} className="carte ligne" href={m.role === 'proprietaire' ? undefined : `#/utilisateurs/${encodeURIComponent(m.identifiant)}`} style={{ textDecoration: 'none', color: 'inherit' }}>
           <span>
-            <b>{m.nom ?? m.telephone}</b>{m.fonction ? ` · ${m.fonction}` : ''}
+            <b>{m.nom ?? m.identifiant}</b>{m.fonction ? ` · ${m.fonction}` : ''}
             <br />
             <small className="muet">
-              {m.nom ? `${m.telephone} · ` : ''}{LIBELLES_PROFILS[m.role]}
+              {m.identifiant} · {LIBELLES_PROFILS[m.role]}
               {m.role !== 'proprietaire' ? ` · ${m.droits.length} fonction${m.droits.length > 1 ? 's' : ''}` : ''}
               {m.zones.length > 0 ? ` · ${m.zones.length} bâtiment${m.zones.length > 1 ? 's' : ''}` : ''}
-              {!m.actif ? (m.invitationEnCours ? ' · code donné, pas encore connecté' : ' · pas encore connecté') : ''}
+              {ETAT_COMPTE[m.etat]}
             </small>
           </span>
           {m.role !== 'proprietaire' && <b aria-hidden="true">›</b>}
@@ -84,47 +91,49 @@ function Liste() {
   );
 }
 
-export function FormUtilisateur({ elevage, telephone }: { elevage: Elevage; telephone?: string }) {
-  return <Acces elevage={elevage} enfant={<Formulaire elevage={elevage} {...(telephone ? { telephone } : {})} />} />;
+export function FormUtilisateur({ elevage, identifiant }: { elevage: Elevage; identifiant?: string }) {
+  return <Acces elevage={elevage} enfant={<Formulaire elevage={elevage} {...(identifiant ? { identifiant } : {})} />} />;
 }
 
-function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage; telephone?: string }) {
+function Formulaire({ elevage, identifiant: identifiantInitial }: { elevage: Elevage; identifiant?: string }) {
   const confirmer = useConfirmer();
   const notifier = useNotifier();
-  const [existant, setExistant] = useState<Membre | null | undefined>(telephoneInitial ? undefined : null);
+  const [existant, setExistant] = useState<Membre | null | undefined>(identifiantInitial ? undefined : null);
+  const [prenom, setPrenom] = useState('');
   const [nom, setNom] = useState('');
   const [fonction, setFonction] = useState('');
-  const [telephone, setTelephone] = useState(telephoneInitial ?? '');
+  const [telephone, setTelephone] = useState('');
   const [droits, setDroits] = useState<string[]>([]);
   const [profil, setProfil] = useState<RoleMembre>('soigneur');
   const [toute, setToute] = useState(true);
   const [zones, setZones] = useState<string[]>([]);
   const [erreur, setErreur] = useState<string | null>(null);
   const [occupe, setOccupe] = useState(false);
-  const [code, setCode] = useState<{ telephone: string; code: string } | null>(null);
+  const [compte, setCompte] = useState<{ compte: CompteProvisoire; telephone: string | null; titre: string } | null>(null);
   const proprietaire = elevage.moi.role === 'proprietaire';
 
   // Nouvelle personne : on part du profil « soigneur ». Personne existante : on charge sa fiche.
   useEffect(() => {
-    if (!telephoneInitial) {
+    if (!identifiantInitial) {
       setDroits(droitsDuProfil('soigneur'));
       return;
     }
     synchro.membres().then((liste) => {
-      const m = liste.find((x) => x.telephone === telephoneInitial);
+      const m = liste.find((x) => x.identifiant === identifiantInitial);
       setExistant(m ?? null);
       if (m) {
         setNom(m.nom ?? '');
         setFonction(m.fonction ?? '');
+        setTelephone(m.telephone ?? '');
         setDroits(m.droits);
         setProfil(profilCorrespondant(m.droits));
         setToute(m.zones.length === 0);
         setZones(m.zones);
       }
     }).catch((e) => setErreur(messageErreur(e)));
-  }, [telephoneInitial]);
+  }, [identifiantInitial]);
 
-  if (existant === null && telephoneInitial) return <><Retour vers="utilisateurs" /><div className="carte muet">Cette personne ne fait plus partie de l’élevage.</div></>;
+  if (existant === null && identifiantInitial) return <><Retour vers="utilisateurs" /><div className="carte muet">Cette personne ne fait plus partie de l’élevage.</div></>;
   if (existant === undefined) return <p className="chargement">Chargement…</p>;
 
   const choisirProfil = (p: RoleMembre) => {
@@ -145,16 +154,20 @@ function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     setErreur(null);
-    const tel = normaliserTelephone(telephone);
-    if (!tel) return setErreur('Numéro de téléphone invalide. Exemple : 77 123 45 67.');
+    if (telephone.trim() && !normaliserTelephone(telephone)) return setErreur('Numéro de téléphone invalide. Exemple : 77 123 45 67.');
     if (droits.length === 0) return setErreur('Cochez au moins une fonction, ou choisissez un profil.');
     if (!toute && zones.length === 0) return setErreur('Choisissez au moins un bâtiment, ou cochez « Toute la ferme ».');
+    const commun = { fonction, telephone, role: profilCorrespondant(droits), droits, zones: toute ? [] : zones };
     setOccupe(true);
     try {
-      const r = await synchro.enregistrerMembre({ telephone: tel, nom, fonction, role: profilCorrespondant(droits), droits, zones: toute ? [] : zones, ...(existant ? {} : { nouveauCode: true }) });
-      notifier('Enregistré ✓');
-      if (r.codeInvitation) setCode({ telephone: tel, code: r.codeInvitation });
-      else aller('utilisateurs');
+      if (existant) {
+        await synchro.modifierMembre(existant.identifiant, { ...commun, nom });
+        notifier('Enregistré ✓');
+        aller('utilisateurs');
+      } else {
+        const r = await synchro.ajouterMembre({ ...commun, prenom, nom });
+        setCompte({ compte: r, telephone: normaliserTelephone(telephone), titre: 'Compte créé' });
+      }
     } catch (err) {
       setErreur(messageErreur(err));
     } finally {
@@ -162,27 +175,24 @@ function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage
     }
   };
 
-  const nouveauCode = async () => {
+  const reinitialiser = async () => {
+    if (!existant) return;
+    if (!await confirmer(`Donner un nouveau mot de passe provisoire à ${existant.nom ?? existant.identifiant} ? Son ancien mot de passe ne fonctionnera plus et ses appareils seront déconnectés.`)) return;
     try {
-      const r = await synchro.enregistrerMembre({ telephone: existant!.telephone, nouveauCode: true });
-      if (r.codeInvitation) setCode({ telephone: existant!.telephone, code: r.codeInvitation });
+      const r = await synchro.reinitialiserMotDePasse(existant.identifiant);
+      setCompte({ compte: r, telephone: existant.telephone, titre: 'Nouveau mot de passe provisoire' });
     } catch (err) {
       setErreur(messageErreur(err));
     }
   };
 
-  if (code) {
-    const message = `Bonjour${nom ? ` ${nom}` : ''}, je vous ai ajouté(e) à l’élevage ${elevage.reglages.nomElevage || ''} sur l’application. Votre code de connexion : ${code.code} (valable 7 jours, à usage unique). Ouvrez l’application, allez dans Réglages puis « Compte », entrez votre numéro, appuyez sur « J’ai déjà un code » et saisissez ce code.`;
+  if (compte) {
     return (
       <>
         <Retour vers="utilisateurs" libelle="Utilisateurs" />
-        <div className="carte">
-          <h2>Code de connexion</h2>
-          <p className="gros-code" aria-label={`Code ${code.code.split('').join(' ')}`}>{code.code}</p>
-          <p>Donnez ce code à la personne (<b>{code.telephone}</b>). Il est valable 7 jours et ne sert qu’une fois. Pour des raisons de sécurité, il ne sera plus affichable ensuite : vous pourrez en générer un autre.</p>
-          <a className="bouton alt" href={`https://wa.me/${code.telephone.slice(1)}?text=${encodeURIComponent(message)}`} target="_blank" rel="noopener noreferrer">Envoyer par WhatsApp</a>
+        <MotDePasseProvisoire compte={compte.compte} telephone={compte.telephone} elevage={elevage.reglages.nomElevage || ''} titre={compte.titre}>
           <a className="bouton" href="#/utilisateurs">Terminé</a>
-        </div>
+        </MotDePasseProvisoire>
       </>
     );
   }
@@ -190,11 +200,23 @@ function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage
   return (
     <form onSubmit={soumettre}>
       <Retour vers="utilisateurs" libelle="Utilisateurs" />
-      <h2>{existant ? (existant.nom ?? existant.telephone) : 'Ajouter un utilisateur'}</h2>
-      <Champ libelle="Nom de la personne"><input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Moussa Ndiaye" /></Champ>
+      <h2>{existant ? (existant.nom ?? existant.identifiant) : 'Ajouter un utilisateur'}</h2>
+      {existant ? (
+        <>
+          <div className="carte ligne"><span>Identifiant</span><b>{existant.identifiant}</b></div>
+          <Champ libelle="Nom de la personne"><input value={nom} onChange={(e) => setNom(e.target.value)} /></Champ>
+        </>
+      ) : (
+        <>
+          <Champ libelle="Prénom"><input value={prenom} onChange={(e) => setPrenom(e.target.value)} placeholder="Moussa" required /></Champ>
+          <Champ libelle="Nom" aide={`L’identifiant sera créé automatiquement : ${prenom.trim() && nom.trim() ? identifiantDepuisNom(prenom, nom) || '…' : 'nom.prénom'} (un chiffre sera ajouté s’il existe déjà).`}>
+            <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ndiaye" required />
+          </Champ>
+        </>
+      )}
       <Champ libelle="Fonction dans la ferme" aide="Libre : « Responsable bâtiment A », « Caissier », « Gardien »…"><input value={fonction} onChange={(e) => setFonction(e.target.value)} /></Champ>
-      <Champ libelle="Téléphone" aide={existant ? undefined : 'Elle se connectera avec ce numéro.'}>
-        <input type="tel" inputMode="tel" value={telephone} onChange={(e) => setTelephone(e.target.value)} disabled={!!existant} />
+      <Champ libelle="Téléphone (facultatif)" aide="Pour la joindre ou lui envoyer ses accès par WhatsApp. Il ne sert pas à se connecter.">
+        <input type="tel" inputMode="tel" value={telephone} onChange={(e) => setTelephone(e.target.value)} />
       </Champ>
 
       <h3>Ce que cette personne peut faire</h3>
@@ -231,12 +253,15 @@ function Formulaire({ elevage, telephone: telephoneInitial }: { elevage: Elevage
       </div>
 
       {erreur && <p className="erreur" role="alert">{erreur}</p>}
-      <button className="bouton" disabled={occupe || !telephone.trim()}>{occupe ? 'Enregistrement…' : existant ? 'Enregistrer' : 'Ajouter et obtenir le code'}</button>
+      <button className="bouton" disabled={occupe || (!existant && (!prenom.trim() || !nom.trim()))}>{occupe ? 'Enregistrement…' : existant ? 'Enregistrer' : 'Ajouter et obtenir le mot de passe provisoire'}</button>
       {existant && (
         <div className="carte">
-          <button type="button" className="lien" onClick={() => void nouveauCode()}>Donner un nouveau code de connexion</button>
-          <button type="button" className="lien" onClick={async () => { if (await confirmer('Déconnecter tous les appareils de cette personne ?')) { try { await synchro.deconnecterAppareils(existant.telephone); notifier('Appareils déconnectés'); } catch (err) { setErreur(messageErreur(err)); } } }}>Déconnecter ses appareils</button>
-          <button type="button" className="lien danger" onClick={async () => { if (await confirmer('Retirer cette personne de l’élevage ?')) { try { await synchro.retirer(existant.telephone); aller('utilisateurs'); } catch (err) { setErreur(messageErreur(err)); } } }}>Retirer de l’élevage</button>
+          <p className="muet">
+            {existant.etat === 'actif' ? 'Vous ne pouvez pas voir son mot de passe. Si elle l’a oublié, générez-en un nouveau.' : existant.etat === 'expire' ? 'Son mot de passe provisoire a expiré : générez-en un nouveau.' : 'Elle n’a pas encore choisi son mot de passe personnel.'}
+          </p>
+          <button type="button" className="lien" onClick={() => void reinitialiser()}>Réinitialiser son mot de passe</button>
+          <button type="button" className="lien" onClick={async () => { if (await confirmer('Déconnecter tous les appareils de cette personne ?')) { try { await synchro.deconnecterAppareils(existant.identifiant); notifier('Appareils déconnectés'); } catch (err) { setErreur(messageErreur(err)); } } }}>Déconnecter ses appareils</button>
+          <button type="button" className="lien danger" onClick={async () => { if (await confirmer('Retirer cette personne de l’élevage ? Son compte sera supprimé.')) { try { await synchro.retirer(existant.identifiant); aller('utilisateurs'); } catch (err) { setErreur(messageErreur(err)); } } }}>Retirer de l’élevage</button>
         </div>
       )}
     </form>
