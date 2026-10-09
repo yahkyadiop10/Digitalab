@@ -1,3 +1,4 @@
+import { SaisieCodeChiffres } from '../components/Comptes';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { SEUILS_PAR_DEFAUT, problemeDeCode, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
 import { Champ, useNotifier, versNombre, useConfirmer } from '../components/ui';
@@ -107,9 +108,9 @@ function SessionEtSecurite({ elevage }: { elevage: Elevage }) {
       </div>
       {mode === 'code' && (
         <form onSubmit={enregistrerCode}>
-          {appareil?.aCode && <Champ libelle="Code actuel"><input type="password" inputMode="numeric" autoComplete="current-password" maxLength={6} value={ancien} onChange={(e) => setAncien(e.target.value.replace(/\D/g, ''))} /></Champ>}
-          <Champ libelle="Nouveau code (4 à 6 chiffres)"><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></Champ>
-          <Champ libelle="Confirmez le nouveau code"><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={confirmation} onChange={(e) => setConfirmation(e.target.value.replace(/\D/g, ''))} /></Champ>
+          {appareil?.aCode && <Champ libelle="Code actuel"><SaisieCodeChiffres valeur={ancien} onChange={setAncien} /></Champ>}
+          <Champ libelle="Nouveau code (4 à 6 chiffres)"><SaisieCodeChiffres valeur={code} onChange={setCode} nouveau /></Champ>
+          <Champ libelle="Confirmez le nouveau code"><SaisieCodeChiffres valeur={confirmation} onChange={setConfirmation} nouveau /></Champ>
           {erreur && <p className="erreur" role="alert">{erreur}</p>}
           <button className="bouton court" disabled={code.length < 4}>Enregistrer le code</button>
           {!relie && appareil?.aCode && (

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { problemeDeCode } from '@digitalab/core';
 import { Embleme, LogoProduit, Pied } from './Marque';
+import { SaisieCodeChiffres } from './Comptes';
 import { Champ, useConfirmer } from './ui';
 import { profilDe } from '../droits';
 import { ErreurCode, securite } from '../securite';
@@ -66,10 +67,10 @@ export function CreerCode({ onFait }: { onFait: () => void }) {
   return (
     <Cadre>
       <h1>Choisissez votre code</h1>
-      <p className="muet">Ce code de 4 à 6 chiffres verrouille l’application quand vous ne l’utilisez plus, même sans réseau. Gardez-le pour vous.</p>
+      <p className="muet">Dernière étape : ce code de <b>4 à 6 chiffres</b> verrouille l’application sur ce téléphone quand vous ne l’utilisez plus, même sans réseau. Ce n’est <b>pas</b> votre mot de passe : il ne contient que des chiffres, et vous seul le connaissez. Gardez-le pour vous.</p>
       <form className="carte" onSubmit={soumettre}>
-        <Champ libelle="Votre code (4 à 6 chiffres)"><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></Champ>
-        <Champ libelle="Confirmez le code"><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} value={confirmation} onChange={(e) => setConfirmation(e.target.value.replace(/\D/g, ''))} /></Champ>
+        <Champ libelle="Votre code (4 à 6 chiffres)"><SaisieCodeChiffres valeur={code} onChange={setCode} nouveau /></Champ>
+        <Champ libelle="Confirmez le code"><SaisieCodeChiffres valeur={confirmation} onChange={setConfirmation} nouveau /></Champ>
         {erreur && <p className="erreur" role="alert">{erreur}</p>}
         <button className="bouton" disabled={code.length < 4}>Enregistrer mon code</button>
       </form>
@@ -120,7 +121,7 @@ export function Verrou({ elevage, connecte, surDeverrouillage }: { elevage: Elev
         <h1>Session verrouillée</h1>
         <p className="muet">{profil.nom}{elevage.moi.fonction ? ` · ${elevage.moi.fonction}` : ''}</p>
         <form className="carte" onSubmit={soumettre}>
-          <Champ libelle="Votre code"><input ref={champ} type="password" inputMode="numeric" autoComplete="current-password" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} disabled={attente > 0} /></Champ>
+          <Champ libelle="Votre code"><SaisieCodeChiffres reference={champ} valeur={code} onChange={setCode} desactive={attente > 0} /></Champ>
           {message && <p className="erreur" role="alert">{attente > 0 ? `Trop d’essais. Patientez ${attente} s.` : message}</p>}
           <button className="bouton" disabled={code.length < 4 || attente > 0}>Déverrouiller</button>
         </form>

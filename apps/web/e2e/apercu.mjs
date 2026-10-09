@@ -59,6 +59,10 @@ try {
   await app.getByRole('button', { name: 'Entrer dans l’application' }).click();
   // Une personne connectée choisit d'abord son code de verrouillage.
   await app.getByRole('heading', { name: 'Choisissez votre code' }).waitFor();
+  // Ce code n'a que des chiffres : si l'on y tape un mot de passe ou un code de secours, l'écran explique pourquoi.
+  await app.getByLabel('Votre code (4 à 6 chiffres)').pressSequentially('kmqx');
+  await app.getByText(/seulement des chiffres/).waitFor();
+  assert.equal(await app.getByLabel('Votre code (4 à 6 chiffres)').inputValue(), '');
   await app.getByLabel('Votre code (4 à 6 chiffres)').fill('1234');
   await app.getByLabel('Confirmez le code').fill('1234');
   await app.getByText(/suite de chiffres/).or(app.getByRole('button', { name: 'Enregistrer mon code' })).first().waitFor();

@@ -128,3 +128,30 @@ export function MotDePasseProvisoire({ compte, telephone, elevage, titre, childr
     </div>
   );
 }
+
+/** Saisie du code de verrouillage de l'appareil : 4 à 6 chiffres seulement. Si une lettre est tapée, on dit pourquoi elle disparaît au lieu de l'effacer en silence. */
+export function SaisieCodeChiffres({ valeur, onChange, nouveau = false, id, desactive = false, reference }: {
+  valeur: string; onChange: (v: string) => void; nouveau?: boolean; id?: string; desactive?: boolean; reference?: React.Ref<HTMLInputElement>;
+}) {
+  const [refuse, setRefuse] = useState(false);
+  return (
+    <>
+      <input
+        {...(id ? { id } : {})}
+        {...(reference ? { ref: reference } : {})}
+        type="password"
+        inputMode="numeric"
+        autoComplete={nouveau ? 'new-password' : 'current-password'}
+        maxLength={6}
+        value={valeur}
+        disabled={desactive}
+        onChange={(e) => {
+          const brut = e.target.value;
+          setRefuse(/\D/.test(brut));
+          onChange(brut.replace(/\D/g, ''));
+        }}
+      />
+      {refuse && <small className="erreur" role="status">Ici, seulement des chiffres. Votre mot de passe et vos codes de secours (lettres et chiffres) se saisissent sur la page de connexion.</small>}
+    </>
+  );
+}
