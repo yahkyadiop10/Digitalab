@@ -4,12 +4,16 @@ import { db, type BaseElevage } from './db';
 
 /**
  * Empreinte locale du mot de passe, pour pouvoir le redemander après un moment d'inactivité même sans réseau.
- * On ne garde jamais le mot de passe, seulement une empreinte salée.
+ * On ne garde jamais le mot de passe, et même pas son empreinte complète : seulement ses 4 premiers caractères (16 bits).
+ * Quelqu'un qui lirait l'appareil ne peut donc pas retrouver le mot de passe (des milliers d'autres donnent les mêmes 16 bits) ;
+ * en échange, un mot de passe faux a une chance sur 65 536 d'ouvrir l'écran, et l'appareil n'accepte que 10 essais.
  */
 export interface Verrou {
   sel: string;
   empreinte: string;
   algo: 'pbkdf2' | 'sha256-iteree';
+  /** 2 : empreinte tronquée d'un mot de passe. Absent : ancien code à chiffres, qui n'est plus accepté. */
+  version?: 2;
   echecs: number;
   /** Instant (ms) avant lequel on refuse tout essai. */
   bloqueJusqua?: number;
@@ -77,12 +81,14 @@ async function calculer(code: string, sel: string, algo: Verrou['algo']): Promis
   return hex(courant);
 }
 
+const LONGUEUR_EMPREINTE_LOCALE = 4;
+
 const algoDisponible = (): Verrou['algo'] => (typeof crypto !== 'undefined' && crypto.subtle ? 'pbkdf2' : 'sha256-iteree');
 const selAleatoire = () => hex(crypto.getRandomValues(new Uint8Array(16)));
 
 export type ResultatCode = { ok: true } | { ok: false; restants?: number; attenteSecondes?: number; reconnexionRequise?: boolean };
 
-export function creerSecurite(base: BaseElevage = db, maintenant: () => number = Date.now) {
+export function creerSecurite(base: BaseElevage = db, maintenant: () => number = Date.now, nouveauSel: () => string = selAleatoire) {
   const lire = async (): Promise<Verrou | undefined> => (await base.appareil.get('verrou'))?.valeur as Verrou | undefined;
   const ecrire = (v: Verrou) => base.appareil.put({ cle: 'verrou', valeur: v });
 
@@ -95,22 +101,28 @@ export function creerSecurite(base: BaseElevage = db, maintenant: () => number =
     async definirSecret(motDePasse: string): Promise<void> {
       if (!motDePasse) throw new ErreurCode('Mot de passe vide.');
       const algo = algoDisponible();
-      const sel = selAleatoire();
-      await ecrire({ sel, algo, empreinte: await calculer(motDePasse, sel, algo), echecs: 0 });
+      const sel = nouveauSel();
+      await ecrire({ sel, algo, version: 2, empreinte: (await calculer(motDePasse, sel, algo)).slice(0, LONGUEUR_EMPREINTE_LOCALE), echecs: 0 });
     },
 
     /** Vérifie le mot de passe sur l'appareil ; après trop d'échecs, l'attente s'allonge puis une vraie reconnexion est exigée. */
     async verifier(code: string): Promise<ResultatCode> {
       const v = await lire();
-      if (!v) return { ok: false };
+      // Sans empreinte, ou avec celle d'un ancien code à chiffres : rien ne s'ouvre sur l'appareil, c'est le serveur qui vérifie.
+      if (!v || v.version !== 2) return { ok: false };
+      // Une fois les essais épuisés, il faut se reconnecter : l'appareil ne vérifie plus rien, même après une attente.
+      if (v.echecs >= ESSAIS_MAX) return { ok: false, reconnexionRequise: true };
       const t = maintenant();
       if (v.bloqueJusqua && v.bloqueJusqua > t) return { ok: false, attenteSecondes: Math.ceil((v.bloqueJusqua - t) / 1000) };
-      if ((await calculer(code, v.sel, v.algo)) === v.empreinte) {
+      if ((await calculer(code, v.sel, v.algo)).slice(0, v.empreinte.length) === v.empreinte) {
         await ecrire({ ...v, echecs: 0, ...(v.bloqueJusqua ? { bloqueJusqua: undefined } : {}) });
         return { ok: true };
       }
       const echecs = v.echecs + 1;
-      if (echecs >= ESSAIS_MAX) return { ok: false, reconnexionRequise: true };
+      if (echecs >= ESSAIS_MAX) {
+        await ecrire({ ...v, echecs });
+        return { ok: false, reconnexionRequise: true };
+      }
       const attente = attenteApresEchecs(echecs);
       await ecrire({ ...v, echecs, ...(attente > 0 ? { bloqueJusqua: t + attente * 1000 } : {}) });
       return { ok: false, restants: ESSAIS_MAX - echecs, ...(attente > 0 ? { attenteSecondes: attente } : {}) };

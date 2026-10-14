@@ -10,7 +10,8 @@ beforeEach(() => {
   base = new BaseElevage(`securite-${++n}`);
   horloge = 1_000_000;
 });
-const nouvelle = () => creerSecurite(base, () => horloge);
+// Sel fixe : avec une empreinte tronquée, un mauvais mot de passe pourrait sinon, très rarement, tomber juste.
+const nouvelle = () => creerSecurite(base, () => horloge, () => '0123456789abcdef0123456789abcdef');
 
 const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 
@@ -30,7 +31,25 @@ describe('mot de passe retenu par l’appareil (pour le redemander sans réseau)
     await s.definirSecret('poule7');
     const ligne = JSON.stringify(await base.appareil.get('verrou'));
     expect(ligne).not.toContain('poule7');
+    // Seulement 16 bits de l'empreinte : impossible d'en retrouver le mot de passe.
+    expect((await base.appareil.get('verrou'))?.valeur).toMatchObject({ version: 2, empreinte: expect.stringMatching(/^[0-9a-f]{4}$/) });
     expect(await s.aUnSecret()).toBe(true);
+  });
+
+  it('n’accepte plus l’ancien code à chiffres d’avant la mise à jour : le serveur vérifiera le mot de passe', async () => {
+    await base.appareil.put({ cle: 'verrou', valeur: { sel: '00', empreinte: 'a'.repeat(64), algo: 'pbkdf2', echecs: 0 } });
+    expect(await nouvelle().verifier('2580')).toEqual({ ok: false });
+  });
+
+  it('après dix échecs, plus rien ne s’ouvre sur l’appareil, même le bon mot de passe après une longue attente', async () => {
+    const s = nouvelle();
+    await s.definirSecret('poule7');
+    for (let i = 0; i < 10; i++) {
+      await s.verifier(`faux-${i}`);
+      horloge += 3_600_000;
+    }
+    horloge += 86_400_000;
+    expect(await s.verifier('poule7')).toEqual({ ok: false, reconnexionRequise: true });
   });
 
   it('accepte le bon mot de passe et refuse un mauvais', async () => {

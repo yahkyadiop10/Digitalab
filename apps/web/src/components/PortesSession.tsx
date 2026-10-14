@@ -92,6 +92,8 @@ export function Verrou({ elevage, identifiant, surDeverrouillage }: { elevage: E
     try {
       const r = await securite.verifier(motDePasse);
       if (r.ok) return surDeverrouillage();
+      // Trop d'essais sur cet appareil : on se reconnecte, sans plus rien essayer ici ni auprès du serveur.
+      if (r.reconnexionRequise) return reconnexion();
       if (r.attenteSecondes && r.restants === undefined) {
         setAttente(r.attenteSecondes);
         return setMessage(`Trop d’essais. Patientez ${r.attenteSecondes} secondes.`);
@@ -112,7 +114,6 @@ export function Verrou({ elevage, identifiant, surDeverrouillage }: { elevage: E
           return;
         }
       }
-      if (r.reconnexionRequise) return reconnexion();
       if (r.attenteSecondes) setAttente(r.attenteSecondes);
       setMessage(r.attenteSecondes ? `Mot de passe incorrect. Patientez ${r.attenteSecondes} secondes.` : `Mot de passe incorrect.${r.restants !== undefined ? ` Il vous reste ${r.restants} essais.` : ''}`);
     } finally {

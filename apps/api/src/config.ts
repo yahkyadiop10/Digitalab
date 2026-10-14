@@ -9,6 +9,8 @@ export interface Config {
   coutMotDePasse: CoutMotDePasse;
   /** Dossier de l'application construite (`apps/web/dist`) que le serveur distribue à son adresse : ouvrir le lien affiche l'application. */
   dossierWeb: string | null;
+  /** Le serveur est derrière un relais de confiance (hébergement) : l'adresse du client est alors lue dans X-Forwarded-For. */
+  derriereProxy: boolean;
   /** Origines web autorisées (CORS) ; `true` les autorise toutes. */
   origines: string[] | true;
 }
@@ -24,6 +26,7 @@ export function lireConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionJours: 90,
     coutMotDePasse: COUT_MOT_DE_PASSE_DEFAUT,
     dossierWeb: env['DIGITALAB_WEB']?.trim() || null,
+    derriereProxy: env['DIGITALAB_DERRIERE_PROXY'] === '1',
     origines: origines && origines !== '*' ? origines.split(',').map((o) => o.trim()).filter(Boolean) : true,
   };
 }

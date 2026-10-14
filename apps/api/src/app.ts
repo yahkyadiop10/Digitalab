@@ -28,6 +28,7 @@ interface Utilisateur {
   telephone: string | null;
   /** Mot de passe provisoire : la personne doit d'abord en choisir un autre. */
   doitChanger: boolean;
+  motDePasseExpire?: Date | null;
 }
 
 declare module 'fastify' {
@@ -50,7 +51,8 @@ const JOUR_MS = 86_400_000;
 export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   const { pool, config } = dep;
   const maintenant = dep.maintenant ?? (() => new Date());
-  const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024, trustProxy: true });
+  // L'adresse du client n'est lue dans X-Forwarded-For que derrière un relais de confiance : sinon n'importe qui pourrait la falsifier et échapper à la limite.
+  const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024, trustProxy: config.derriereProxy });
 
   await app.register(cors, { origin: config.origines, methods: ['GET', 'POST', 'PATCH', 'DELETE'], allowedHeaders: ['content-type', 'authorization'] });
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
@@ -64,6 +66,15 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     return reply.status(500).send({ erreur: 'Erreur du serveur. Réessayez plus tard.' });
   });
   app.setNotFoundHandler((_req, reply) => reply.status(404).send({ erreur: 'Adresse inconnue.' }));
+
+  // En-têtes de prudence : pas d'affichage dans le cadre d'un autre site, pas de devinette du type de fichier.
+  app.addHook('onSend', async (_req, reply, payload) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('x-frame-options', 'DENY');
+    reply.header('content-security-policy', "frame-ancestors 'none'");
+    reply.header('referrer-policy', 'same-origin');
+    return payload;
+  });
 
   // L'application elle-même, à l'adresse du serveur : le lien donné au client ouvre directement la page de connexion.
   if (config.dossierWeb) {
@@ -87,7 +98,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     const jeton = entete.startsWith('Bearer ') ? entete.slice(7).trim() : '';
     if (!jeton) throw new ErreurHttp(401, 'Connexion requise.');
     const r = await pool.query<Utilisateur>(
-      `SELECT u.id, u.identifiant, u.nom, u.telephone, u.doit_changer AS "doitChanger"
+      `SELECT u.id, u.identifiant, u.nom, u.telephone, u.doit_changer AS "doitChanger", u.mot_de_passe_expire AS "motDePasseExpire"
        FROM sessions s JOIN utilisateurs u ON u.id = s.utilisateur_id WHERE s.jeton_hash = $1 AND s.expire_le > $2`,
       [empreinteJeton(jeton), maintenant()],
     );
@@ -170,31 +181,56 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
 
   const limiteAuth = { config: { rateLimit: { max: dep.limiteAuthParMinute ?? 15, timeWindow: '1 minute' } } };
 
-  /* Blocage après trop d'échecs : suivi par identifiant, qu'il existe ou non, pour ne rien révéler. */
+  /*
+   * Blocage après trop d'échecs : suivi par identifiant, qu'il existe ou non, pour ne rien révéler.
+   * Chaque essai est compté AVANT la vérification du mot de passe, en une seule écriture : des requêtes envoyées en même temps
+   * ne peuvent donc pas dépasser la limite. Un blocage dure 15 minutes, puis deux fois plus à chaque récidive, jusqu'à 24 heures.
+   */
 
-  async function verifierBlocage(cle: string): Promise<void> {
-    const r = await pool.query<{ verrouille_jusqua: Date | null }>('SELECT verrouille_jusqua FROM echecs_connexion WHERE cle = $1', [cle]);
-    const jusqua = r.rows[0]?.verrouille_jusqua;
-    if (jusqua && jusqua > maintenant()) {
-      const minutes = Math.max(1, Math.ceil((jusqua.getTime() - maintenant().getTime()) / 60_000));
-      throw new ErreurHttp(429, `Trop d’essais. Réessayez dans ${minutes} minute${minutes > 1 ? 's' : ''}.`);
-    }
+  const BLOCAGE_MAX_MS = JOUR_MS;
+
+  const messageBlocage = (jusqua: Date) => {
+    const minutes = Math.max(1, Math.ceil((jusqua.getTime() - maintenant().getTime()) / 60_000));
+    const texte = minutes >= 120 ? `${Math.round(minutes / 60)} heures` : `${minutes} minute${minutes > 1 ? 's' : ''}`;
+    return new ErreurHttp(429, `Trop d’essais. Réessayez dans ${texte}, ou demandez à votre administrateur un nouveau mot de passe.`);
+  };
+
+  async function bloquer(cle: string): Promise<Date> {
+    const now = maintenant();
+    const r = await pool.query<{ verrouille_jusqua: Date }>(
+      `UPDATE echecs_connexion SET essais = 0, blocages = blocages + 1,
+         verrouille_jusqua = $2::timestamptz + LEAST($3::bigint, $4::bigint * power(2, LEAST(blocages, 10))::bigint) * interval '1 millisecond'
+       WHERE cle = $1 RETURNING verrouille_jusqua`,
+      [cle, now, BLOCAGE_MAX_MS, BLOCAGE_CONNEXION_MINUTES * 60_000],
+    );
+    return r.rows[0]?.verrouille_jusqua ?? new Date(now.getTime() + BLOCAGE_CONNEXION_MINUTES * 60_000);
   }
 
-  async function noterEchec(cle: string): Promise<void> {
+  /** Compte l'essai qui commence ; refuse tout de suite si l'identifiant est bloqué ou si la limite est déjà atteinte. */
+  async function reserverEssai(cle: string): Promise<void> {
     const now = maintenant();
-    const r = await pool.query<{ essais: number }>(
+    const l = (await pool.query<{ essais: number; verrouille_jusqua: Date | null }>(
       `INSERT INTO echecs_connexion (cle, essais, dernier_le) VALUES ($1, 1, $2)
        ON CONFLICT (cle) DO UPDATE SET
-         essais = CASE WHEN echecs_connexion.verrouille_jusqua IS NOT NULL AND echecs_connexion.verrouille_jusqua <= $2 THEN 1 ELSE echecs_connexion.essais + 1 END,
+         essais = CASE
+           WHEN echecs_connexion.verrouille_jusqua > $2 THEN echecs_connexion.essais
+           WHEN echecs_connexion.verrouille_jusqua IS NOT NULL THEN 1
+           ELSE echecs_connexion.essais + 1 END,
+         verrouille_jusqua = CASE WHEN echecs_connexion.verrouille_jusqua > $2 THEN echecs_connexion.verrouille_jusqua ELSE NULL END,
          dernier_le = $2
-       RETURNING essais`,
+       RETURNING essais, verrouille_jusqua`,
       [cle, now],
-    );
-    if ((r.rows[0]?.essais ?? 0) >= ESSAIS_CONNEXION_MAX) {
-      await pool.query('UPDATE echecs_connexion SET essais = 0, verrouille_jusqua = $2 WHERE cle = $1', [cle, new Date(now.getTime() + BLOCAGE_CONNEXION_MINUTES * 60_000)]);
-    }
-    await pool.query('DELETE FROM echecs_connexion WHERE dernier_le < $1 AND (verrouille_jusqua IS NULL OR verrouille_jusqua < $1)', [new Date(now.getTime() - JOUR_MS)]);
+    )).rows[0]!;
+    if (l.verrouille_jusqua && l.verrouille_jusqua > now) throw messageBlocage(l.verrouille_jusqua);
+    if (l.essais > ESSAIS_CONNEXION_MAX) throw messageBlocage(await bloquer(cle));
+  }
+
+  /** L'essai (déjà compté) a échoué : au dernier essai permis, l'identifiant est bloqué. */
+  async function noterEchec(cle: string): Promise<void> {
+    const now = maintenant();
+    const l = (await pool.query<{ essais: number }>('SELECT essais FROM echecs_connexion WHERE cle = $1', [cle])).rows[0];
+    if (l && l.essais >= ESSAIS_CONNEXION_MAX) await bloquer(cle);
+    await pool.query('DELETE FROM echecs_connexion WHERE dernier_le < $1 AND (verrouille_jusqua IS NULL OR verrouille_jusqua < $1)', [new Date(now.getTime() - 2 * JOUR_MS)]);
   }
 
   const oublierEchecs = (cle: string) => pool.query('DELETE FROM echecs_connexion WHERE cle = $1', [cle]);
@@ -203,11 +239,9 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   let empreinteFactice: Promise<string> | undefined;
   const fausseEmpreinte = () => (empreinteFactice ??= hacherMotDePasse('mot de passe inexistant', config.coutMotDePasse));
 
-  /** Un mot de passe provisoire se recopie : on tolère les majuscules et espaces que le clavier du téléphone ajoute. */
-  async function motDePasseJuste(saisi: string, empreinte: string, provisoire: boolean): Promise<boolean> {
-    if (await verifierMotDePasse(saisi, empreinte)) return true;
-    const retouche = saisi.trim().toLowerCase();
-    return provisoire && retouche !== saisi && (await verifierMotDePasse(retouche, empreinte));
+  /** Un mot de passe provisoire (6 chiffres) se recopie : on ignore les espaces autour. Une seule vérification, pour que la durée ne trahisse rien. */
+  function motDePasseJuste(saisi: string, empreinte: string, provisoire: boolean): Promise<boolean> {
+    return verifierMotDePasse(provisoire ? saisi.trim() : saisi, empreinte);
   }
 
   async function ouvrirSession(executeur: Executeur, utilisateurId: string, appareil: string | undefined): Promise<string> {
@@ -233,7 +267,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   }, async (req) => {
     const b = req.body as { identifiant: string; motDePasse: string; appareil?: string };
     const identifiant = normaliserIdentifiant(b.identifiant);
-    await verifierBlocage(identifiant);
+    await reserverEssai(identifiant);
     const ligne = (await pool.query<{ id: string; nom: string | null; telephone: string | null; mot_de_passe_hash: string | null; doit_changer: boolean; mot_de_passe_expire: Date | null }>(
       'SELECT id, nom, telephone, mot_de_passe_hash, doit_changer, mot_de_passe_expire FROM utilisateurs WHERE identifiant = $1', [identifiant],
     )).rows[0];
@@ -288,7 +322,11 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   }, async (req) => {
     const u = await authentifier(req, { permissif: true });
     const b = req.body as { ancien: string; nouveau: string };
-    await verifierBlocage(u.identifiant);
+    // Un provisoire expiré ne permet plus de choisir son mot de passe, même avec une session encore ouverte.
+    if (u.doitChanger && u.motDePasseExpire && u.motDePasseExpire <= maintenant()) {
+      throw new ErreurHttp(403, 'Ce mot de passe provisoire a expiré. Demandez-en un nouveau à votre administrateur.', 'provisoire_expire');
+    }
+    await reserverEssai(u.identifiant);
     const ligne = (await pool.query<{ mot_de_passe_hash: string }>('SELECT mot_de_passe_hash FROM utilisateurs WHERE id = $1', [u.id])).rows[0];
     if (!ligne || !(await motDePasseJuste(b.ancien, ligne.mot_de_passe_hash, u.doitChanger))) {
       await noterEchec(u.identifiant);
@@ -459,6 +497,17 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     return cible;
   }
 
+  /**
+   * Un administrateur délégué gère les employés, pas les autres administrateurs : seul le propriétaire peut modifier, retirer,
+   * déconnecter ou réinitialiser une personne qui gère les utilisateurs (sinon un délégué pourrait lui retirer ce droit, puis prendre son compte).
+   */
+  function exigerAutoriteSur(moi: DroitsMembre, cible: LigneMembre, action: string): void {
+    if (moi.role === 'proprietaire') return;
+    if (cible.role === 'proprietaire' || aDroit(droitsEffectifs(cible.role, cible.droits), 'admin.utilisateurs')) {
+      throw new ErreurHttp(403, `Seul le propriétaire peut ${action}${action.endsWith('’') ? '' : ' '}un administrateur.`);
+    }
+  }
+
   /** Modifie une personne : nom, téléphone, fonction, profil, droits cochés, zones. */
   app.patch('/v1/organisations/:id/membres/:identifiant', {
     schema: {
@@ -468,10 +517,11 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   }, async (req) => {
     const u = await authentifier(req);
     const { id, identifiant } = req.params as { id: string; identifiant: string };
-    await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de gérer les utilisateurs.');
+    const moi = await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de gérer les utilisateurs.');
     const cible = await cibleDe(id, identifiant);
     if (cible.role === 'proprietaire') throw new ErreurHttp(400, 'Les droits du propriétaire ne se modifient pas.');
     if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas modifier vos propres droits.');
+    exigerAutoriteSur(moi, cible, 'modifier');
     const b = req.body as { nom?: string; telephone?: string; fonction?: string; role?: RoleMembre; droits?: string[]; zones?: string[] };
     const { role, droits, zones } = await resoudreDroits(id, u, b, cible);
     const telephone = b.telephone === undefined ? undefined : telephoneFacultatif(b.telephone);
@@ -496,9 +546,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     const cible = await cibleDe(id, identifiant);
     if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Pour changer votre propre mot de passe, utilisez « Compte ».');
     if (cible.role === 'proprietaire') throw new ErreurHttp(403, 'Le mot de passe du propriétaire ne se réinitialise pas ici : la personne qui a installé l’application peut lui en redonner un depuis l’ordinateur du serveur.');
-    if (moi.role !== 'proprietaire' && aDroit(droitsEffectifs(cible.role, cible.droits), 'admin.utilisateurs')) {
-      throw new ErreurHttp(403, 'Seul le propriétaire peut réinitialiser le mot de passe d’une personne qui gère les utilisateurs.');
-    }
+    exigerAutoriteSur(moi, cible, 'réinitialiser le mot de passe d’');
     const motDePasseProvisoire = genererMotDePasseProvisoire();
     const empreinte = await hacherMotDePasse(motDePasseProvisoire, config.coutMotDePasse);
     const expire = new Date(maintenant().getTime() + MOT_DE_PASSE_PROVISOIRE_JOURS * JOUR_MS);
@@ -514,10 +562,11 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   app.delete('/v1/organisations/:id/membres/:identifiant', { schema: paramsMembre }, async (req) => {
     const u = await authentifier(req);
     const { id, identifiant } = req.params as { id: string; identifiant: string };
-    await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de retirer des personnes.');
+    const moi = await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de retirer des personnes.');
     const cible = await cibleDe(id, identifiant);
     if (cible.role === 'proprietaire') throw new ErreurHttp(400, 'Le propriétaire ne peut pas être retiré.');
     if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas vous retirer vous-même.');
+    exigerAutoriteSur(moi, cible, 'retirer');
     await transaction(pool, async (c) => {
       await c.query('DELETE FROM membres WHERE organisation_id = $1 AND utilisateur_id = $2', [id, cible.utilisateur_id]);
       // Une personne qui n'appartient plus à aucun élevage n'a plus de raison d'avoir un compte : son identifiant redevient libre.
@@ -531,9 +580,10 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   app.post('/v1/organisations/:id/membres/:identifiant/deconnexion', { schema: paramsMembre }, async (req) => {
     const u = await authentifier(req);
     const { id, identifiant } = req.params as { id: string; identifiant: string };
-    await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de déconnecter des personnes.');
+    const moi = await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de déconnecter des personnes.');
     const cible = await cibleDe(id, identifiant);
     if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Vous ne pouvez pas vous déconnecter vous-même ici.');
+    exigerAutoriteSur(moi, cible, 'déconnecter');
     const r = await pool.query('DELETE FROM sessions WHERE utilisateur_id = $1', [cible.utilisateur_id]);
     await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', cible.identifiant, `a déconnecté les appareils de ${cible.nom ?? cible.identifiant}`, maintenant().getTime());
     return { ok: true, appareils: r.rowCount ?? 0 };
@@ -742,7 +792,14 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     });
   });
 
-  app.get('/v1/sante', async () => ({ ok: true }));
+  app.get('/v1/sante', async (_req, reply) => {
+    try {
+      await pool.query('SELECT 1');
+      return { ok: true };
+    } catch {
+      return reply.status(503).send({ ok: false, erreur: 'La base de données ne répond pas.' });
+    }
+  });
 
   return app;
 }

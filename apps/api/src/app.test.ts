@@ -142,6 +142,37 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect(r.json().erreur).toMatch(/Trop d’essais/);
     });
 
+    it('compte chaque essai avant de vérifier : des essais envoyés en même temps ne dépassent pas la limite', async () => {
+      await creerProprietaire(banc, 'course.essai');
+      const rafale = await Promise.all(Array.from({ length: 25 }, (_, i) => connexion('course.essai', `faux-${i}-mot`)));
+      const evalues = rafale.filter((r) => r.statusCode === 401).length;
+      expect(evalues).toBeLessThanOrEqual(5);
+      expect(rafale.filter((r) => r.statusCode === 429).length).toBe(25 - evalues);
+      // Même le bon mot de passe attend la fin du blocage.
+      expect((await connexion('course.essai', MOT_DE_PASSE_TEST)).statusCode).toBe(429);
+    });
+
+    it('chaque nouveau blocage dure deux fois plus longtemps, et un succès efface tout', async () => {
+      await creerProprietaire(banc, 'recidive.essai');
+      const rater = async () => { for (let i = 0; i < 5; i++) await connexion('recidive.essai', 'faux-mot-1'); };
+      await rater();
+      expect((await connexion('recidive.essai', MOT_DE_PASSE_TEST)).json().erreur).toMatch(/15 minutes/);
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 16 * 60_000);
+      await rater();
+      expect((await connexion('recidive.essai', MOT_DE_PASSE_TEST)).json().erreur).toMatch(/30 minutes/);
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 31 * 60_000);
+      expect((await connexion('recidive.essai', MOT_DE_PASSE_TEST)).statusCode).toBe(200);
+      await rater();
+      expect((await connexion('recidive.essai', MOT_DE_PASSE_TEST)).json().erreur).toMatch(/15 minutes/);
+    });
+
+    it('ajoute des en-têtes de prudence et vérifie la base dans /v1/sante', async () => {
+      const r = await get('/v1/sante');
+      expect(r.json()).toEqual({ ok: true });
+      expect(r.headers['x-frame-options']).toBe('DENY');
+      expect(r.headers['x-content-type-options']).toBe('nosniff');
+    });
+
     it('un succès remet le compteur d’échecs à zéro', async () => {
       await creerProprietaire(banc, 'ba.mamadou');
       for (let i = 0; i < 4; i++) await connexion('ba.mamadou', 'Mauvais-mot-de-passe-1');
@@ -361,6 +392,36 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       expect((await reset(delegue, autreDelegue.identifiant)).statusCode).toBe(403);
       expect((await reset(patron, autreDelegue.identifiant)).statusCode).toBe(200);
       expect((await reset(patron, 'inconnu.inconnu')).statusCode).toBe(404);
+    });
+
+    it('un délégué ne peut pas retirer ses droits à un autre administrateur pour prendre son compte, ni toucher au propriétaire', async () => {
+      const patron = await seConnecter(banc, '77 710 00 20');
+      await inviter(patron, { telephone: '77 710 00 21', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
+      await inviter(patron, { telephone: '77 710 00 22', role: 'personnalise', droits: ['admin.utilisateurs', 'cheptel.voir'] });
+      await inviter(patron, { telephone: '77 710 00 23', role: 'soigneur' });
+      const a = await seConnecter(banc, '77 710 00 21');
+      const b = await seConnecter(banc, '77 710 00 22');
+      const aide = await seConnecter(banc, '77 710 00 23');
+      const chemin = (x: Session) => `${org(patron)}/membres/${encodeURIComponent(x.identifiant)}`;
+      expect((await banc.app.inject({ method: 'PATCH', url: chemin(b), headers: a.entetes, payload: { role: 'lecteur' } })).statusCode).toBe(403);
+      expect((await banc.app.inject({ method: 'DELETE', url: chemin(b), headers: a.entetes })).statusCode).toBe(403);
+      expect((await post(`${chemin(b)}/deconnexion`, {}, a)).statusCode).toBe(403);
+      expect((await post(`${chemin(patron)}/deconnexion`, {}, a)).statusCode).toBe(403);
+      expect((await get('/v1/moi', b)).statusCode).toBe(200);
+      expect((await get('/v1/moi', patron)).statusCode).toBe(200);
+      // Il garde la main sur les employés ; le propriétaire, lui, peut tout.
+      expect((await banc.app.inject({ method: 'PATCH', url: chemin(aide), headers: a.entetes, payload: { role: 'lecteur' } })).statusCode).toBe(200);
+      expect((await banc.app.inject({ method: 'PATCH', url: chemin(b), headers: patron.entetes, payload: { role: 'lecteur' } })).statusCode).toBe(200);
+    });
+
+    it('un mot de passe provisoire expiré ne permet plus de choisir son mot de passe, même avec une session ouverte', async () => {
+      const patron = await seConnecter(banc, '77 710 00 30');
+      const cree = (await post(`${org(patron)}/membres`, { prenom: 'Tard', nom: 'Venu', role: 'lecteur' }, patron)).json();
+      const jeton = (await connexion(cree.identifiant, cree.motDePasseProvisoire)).json().jeton;
+      banc.horloge.maintenant = new Date(banc.horloge.maintenant.getTime() + 6 * 86_400_000);
+      const r = await post('/v1/moi/mot-de-passe', { ancien: cree.motDePasseProvisoire, nouveau: 'tard-venu' }, { entetes: { authorization: `Bearer ${jeton}` } } as Session);
+      expect(r.statusCode).toBe(403);
+      expect(r.json().code).toBe('provisoire_expire');
     });
 
     it('ne réinitialise pas le mot de passe d’une personne d’un autre élevage', async () => {
@@ -911,6 +972,9 @@ describe('configuration du serveur', () => {
   });
   it('lit le dossier de l’application si on le donne, et le coût des mots de passe', () => {
     expect(lireConfig({ DATABASE_URL: 'x' }).dossierWeb).toBeNull();
+    // Par défaut, l'adresse du client n'est pas lue dans un en-tête qu'il pourrait falsifier.
+    expect(lireConfig({ DATABASE_URL: 'x' }).derriereProxy).toBe(false);
+    expect(lireConfig({ DATABASE_URL: 'x', DIGITALAB_DERRIERE_PROXY: '1' }).derriereProxy).toBe(true);
     expect(lireConfig({ DATABASE_URL: 'x', DIGITALAB_WEB: ' /srv/avimaster ' }).dossierWeb).toBe('/srv/avimaster');
     expect(lireConfig({ DATABASE_URL: 'x' }).coutMotDePasse).toEqual({ N: 32768, r: 8, p: 3 });
   });

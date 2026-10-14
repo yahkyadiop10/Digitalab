@@ -11,7 +11,7 @@ export const URL_BASE_TEST = process.env['TEST_DATABASE_URL'];
 export const configTest: Config = {
   port: 0, hote: '127.0.0.1', databaseUrl: URL_BASE_TEST ?? '', sessionJours: 90,
   // Coût réduit : les essais font des dizaines de connexions.
-  coutMotDePasse: { N: 1024, r: 8, p: 1 }, dossierWeb: null, origines: true,
+  coutMotDePasse: { N: 1024, r: 8, p: 1 }, dossierWeb: null, derriereProxy: false, origines: true,
 };
 
 export const MOT_DE_PASSE_TEST = 'Poule-Pondeuse-7';
