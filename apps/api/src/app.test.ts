@@ -92,6 +92,12 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
         expect(page.body).toContain('AviMaster');
         expect((await b.app.inject({ method: 'GET', url: '/v1/sante' })).json()).toEqual({ ok: true });
         expect((await b.app.inject({ method: 'GET', url: '/v1/inconnu' })).json()).toEqual({ erreur: 'Adresse inconnue.' });
+        // Rien hors du dossier de l'application ne doit sortir, même avec des chemins détournés.
+        for (const url of ['/../package.json', '/%2e%2e/package.json', '/..%2fpackage.json', '/%2e%2e%2f%2e%2e%2fetc%2fpasswd']) {
+          const r = await b.app.inject({ method: 'GET', url });
+          expect(r.statusCode, url).toBe(404);
+          expect(r.body, url).not.toMatch(/"name"|root:/);
+        }
       } finally {
         await b.fermer();
         await rm(dossier, { recursive: true, force: true });

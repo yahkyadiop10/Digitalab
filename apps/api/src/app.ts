@@ -74,7 +74,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       cacheControl: false,
       setHeaders: (res, chemin) => {
         // La page et le service hors ligne doivent être relus à chaque fois pour recevoir les mises à jour ; les autres fichiers ont un nom qui change avec leur contenu.
-        if (/(index\.html|sw\.js|manifest\.webmanifest)$/.test(chemin)) res.setHeader('cache-control', 'no-cache');
+        if (/(index\.html|sw\.js|manifest\.webmanifest)$/.test(chemin)) res.header('cache-control', 'no-cache');
       },
     });
   }
