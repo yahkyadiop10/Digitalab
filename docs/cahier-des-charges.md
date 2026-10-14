@@ -57,6 +57,12 @@ Trois formules d'abonnement en ligne (Démarrer, Éleveur, Professionnel), plus 
 
 Chaque phase est validée sur le terrain avant la suivante.
 
+**Accès, évolutions prévues** (après les phases de test et les premiers déploiements). Aujourd'hui : un lien de connexion par client, un identifiant et un mot de passe donnés par l'administrateur, à changer à la première connexion. Ensuite, dans l'ordre :
+1. Adresse sécurisée `https://` pour chaque client (application installable et utilisable sans réseau).
+2. Invitation par code QR : l'employé scanne le code montré par l'administrateur, son téléphone rejoint l'élevage sans rien taper.
+3. Téléphone autorisé + code à 4 chiffres, comme Wave ou Orange Money ; un téléphone perdu se retire à distance.
+4. Double authentification (Google Authenticator) pour l'administrateur de l'offre hébergée.
+
 ## 6. Points ouverts
 
 - Prix des formules et gratuité éventuelle de « Démarrer ».

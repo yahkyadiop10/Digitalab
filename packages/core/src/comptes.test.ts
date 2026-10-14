@@ -37,16 +37,18 @@ describe('identifiants', () => {
 });
 
 describe('mots de passe', () => {
-  it('exige 8 caractères au moins', () => {
-    expect(problemeMotDePasse('abc12')).toMatch(/8 caractères/);
+  it('exige 6 caractères au moins', () => {
+    expect(problemeMotDePasse('abc12')).toMatch(/6 caractères/);
+    expect(problemeMotDePasse('poule7')).toBeNull();
     expect(problemeMotDePasse('Poule-Pondeuse-7')).toBeNull();
   });
 
   it('refuse les mots de passe courants ou trop simples', () => {
+    expect(problemeMotDePasse('123456')).toMatch(/courant/);
     expect(problemeMotDePasse('12345678')).toMatch(/courant/);
-    expect(problemeMotDePasse('PASSWORD')).toMatch(/courant/);
-    expect(problemeMotDePasse('aaaaaaaa')).toMatch(/simple/);
-    expect(problemeMotDePasse('abababab')).toMatch(/simple/);
+    expect(problemeMotDePasse('AZERTY')).toMatch(/courant/);
+    expect(problemeMotDePasse('aaaaaa')).toMatch(/simple/);
+    expect(problemeMotDePasse('ababab')).toMatch(/simple/);
   });
 
   it('refuse un mot de passe qui contient l’identifiant', () => {

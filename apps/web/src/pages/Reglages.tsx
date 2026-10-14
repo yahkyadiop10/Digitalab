@@ -1,8 +1,6 @@
-import { SaisieCodeChiffres } from '../components/Comptes';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { SEUILS_PAR_DEFAUT, problemeDeCode, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
+import { SEUILS_PAR_DEFAUT, type Logement, type Seuils, type TypeLogement } from '@digitalab/core';
 import { Champ, useNotifier, versNombre, useConfirmer } from '../components/ui';
-import { ErreurCode, securite, useAppareil } from '../securite';
 import { verrouillerMaintenant } from '../session';
 import { synchro } from '../sync';
 import { chargerDemo } from '../demo';
@@ -68,65 +66,26 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
 function SessionEtSecurite({ elevage }: { elevage: Elevage }) {
   const notifier = useNotifier();
   const confirmer = useConfirmer();
-  const appareil = useAppareil();
   const relie = elevage.moi.relie;
-  const { verrouillageMin, deconnexionMin } = elevage.politique;
-  const [mode, setMode] = useState<'aucun' | 'code'>('aucun');
-  const [ancien, setAncien] = useState('');
-  const [code, setCode] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [erreur, setErreur] = useState<string | null>(null);
-  const [lock, setLock] = useState(String(verrouillageMin));
-  const [decon, setDecon] = useState(String(deconnexionMin));
+  const { verrouillageMin } = elevage.politique;
+  const [delai, setDelai] = useState(String(verrouillageMin));
 
-  const enregistrerCode = async (e: FormEvent) => {
-    e.preventDefault();
-    const probleme = problemeDeCode(code);
-    if (probleme) return setErreur(probleme);
-    if (code !== confirmation) return setErreur('Les deux codes ne sont pas identiques.');
-    try {
-      await securite.definirCode(code, appareil?.aCode ? ancien : undefined);
-      notifier('Code enregistré ✓');
-      setMode('aucun');
-      setAncien(''); setCode(''); setConfirmation(''); setErreur(null);
-    } catch (err) {
-      setErreur(err instanceof ErreurCode ? err.message : 'Enregistrement impossible.');
-    }
-  };
-
+  if (!relie) {
+    return <div className="carte muet">Sans compte, l’application reste ouverte sur cet appareil. Avec un compte, elle redemande le mot de passe après un moment sans utilisation.</div>;
+  }
   return (
     <div className="carte">
-      <p className="muet">
-        {relie || appareil?.aCode
-          ? `L’application se verrouille après ${verrouillageMin} minute${verrouillageMin > 1 ? 's' : ''} sans utilisation${relie ? ` et vous déconnecte après ${deconnexionMin} minute${deconnexionMin > 1 ? 's' : ''}` : ''}.`
-          : 'Sans compte, l’application reste ouverte. Vous pouvez la protéger par un code : elle se verrouillera quand vous ne l’utilisez plus.'}
-      </p>
+      <p className="muet">Après {verrouillageMin} minute{verrouillageMin > 1 ? 's' : ''} sans utilisation, l’application redemande votre mot de passe, même sans réseau.</p>
       <div className="rangee">
-        {appareil?.aCode && <button className="bouton court" onClick={() => verrouillerMaintenant(elevage.politique)}>🔒 Verrouiller maintenant</button>}
-        {relie && <button className="bouton alt court" onClick={async () => { if (await confirmer('Se déconnecter ? Vos données restent sur cet appareil, mais il faudra vous reconnecter avec un code pour les rouvrir.')) await synchro.deconnecter(); }}>Se déconnecter</button>}
-        <button className="bouton alt court" onClick={() => setMode(mode === 'code' ? 'aucun' : 'code')}>{appareil?.aCode ? 'Changer mon code' : 'Définir un code de verrouillage'}</button>
+        <button className="bouton court" onClick={() => verrouillerMaintenant(elevage.politique)}>🔒 Verrouiller maintenant</button>
+        <button className="bouton alt court" onClick={async () => { if (await confirmer('Se déconnecter ? Vos données restent sur cet appareil, mais il faudra vous reconnecter avec votre identifiant et votre mot de passe.')) await synchro.deconnecter(); }}>Se déconnecter</button>
       </div>
-      {mode === 'code' && (
-        <form onSubmit={enregistrerCode}>
-          {appareil?.aCode && <Champ libelle="Code actuel"><SaisieCodeChiffres valeur={ancien} onChange={setAncien} /></Champ>}
-          <Champ libelle="Nouveau code (4 à 6 chiffres)"><SaisieCodeChiffres valeur={code} onChange={setCode} nouveau /></Champ>
-          <Champ libelle="Confirmez le nouveau code"><SaisieCodeChiffres valeur={confirmation} onChange={setConfirmation} nouveau /></Champ>
-          {erreur && <p className="erreur" role="alert">{erreur}</p>}
-          <button className="bouton court" disabled={code.length < 4}>Enregistrer le code</button>
-          {!relie && appareil?.aCode && (
-            <button type="button" className="lien danger" onClick={async () => { try { await securite.retirerCode(ancien); notifier('Code retiré'); setMode('aucun'); } catch { setErreur('Entrez votre code actuel pour le retirer.'); } }}>Retirer le code</button>
-          )}
-        </form>
-      )}
-      {peut(elevage, 'admin.elevage') && relie && (
+      {peut(elevage, 'admin.elevage') && (
         <>
-          <h3>Délais de la ferme</h3>
-          <p className="muet">Valables pour toutes les personnes de l’élevage. Le verrouillage se débloque avec le code, même sans réseau ; la déconnexion demande un nouveau code de connexion, donc du réseau.</p>
-          <div className="duo">
-            <Champ libelle="Verrouiller après (minutes)"><input inputMode="numeric" value={lock} onChange={(e) => setLock(e.target.value)} /></Champ>
-            <Champ libelle="Déconnecter après (minutes)"><input inputMode="numeric" value={decon} onChange={(e) => setDecon(e.target.value)} /></Champ>
-          </div>
-          <button className="bouton alt court" onClick={async () => { await repo.enregistrerProfil({ securite: { verrouillageMin: Number(lock), deconnexionMin: Number(decon) } }); notifier('Délais enregistrés ✓'); }}>Enregistrer les délais</button>
+          <h3>Délai de la ferme</h3>
+          <p className="muet">Valable pour toutes les personnes de l’élevage.</p>
+          <Champ libelle="Redemander le mot de passe après (minutes)"><input inputMode="numeric" value={delai} onChange={(e) => setDelai(e.target.value)} /></Champ>
+          <button className="bouton alt court" onClick={async () => { await repo.enregistrerProfil({ securite: { verrouillageMin: Number(delai) } }); notifier('Délai enregistré ✓'); }}>Enregistrer le délai</button>
         </>
       )}
       <p className="muet">Le verrouillage cache l’application mais ne chiffre pas les données de l’appareil : gardez aussi le verrouillage d’écran de votre téléphone.</p>

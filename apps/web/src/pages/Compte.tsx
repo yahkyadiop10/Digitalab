@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { LIBELLES_PROFILS, normaliserIdentifiant, problemeIdentifiant, tablesEcrivables } from '@digitalab/core';
-import { CodesSecours, FormNouveauMotDePasse, SaisieMotDePasse, problemeNouveauMotDePasse } from '../components/Comptes';
+import { LIBELLES_PROFILS, tablesEcrivables } from '@digitalab/core';
+import { FormNouveauMotDePasse, SaisieMotDePasse } from '../components/Comptes';
+import { securite } from '../securite';
 import { Champ, Retour, useNotifier, useConfirmer } from '../components/ui';
 import { db, type Connexion } from '../db';
 import { aller } from '../route';
 import { marquerActivite } from '../session';
-import { ErreurAppareilAutre, ErreurReseau, ErreurServeur, MODE_APERCU, URL_SERVEUR_DEFAUT, synchro, type EtatInstallation, type OrganisationServeur, type ResultatSync, type SessionServeur } from '../sync';
+import { ErreurAppareilAutre, ErreurReseau, ErreurServeur, MODE_APERCU, URL_SERVEUR_DEFAUT, synchro, type OrganisationServeur, type ResultatSync, type SessionServeur } from '../sync';
 
 export const useConnexion = (): Connexion | undefined | null => useLiveQuery(async () => (await db.connexion.get('serveur')) ?? null, []);
 
@@ -48,7 +49,7 @@ export function PageCompte() {
       {MODE_APERCU && (
         <div className="bandeau n-jaune" role="note">
           <strong>Démonstration</strong>
-          <span>Dans cet aperçu, le serveur est simulé : vous pouvez créer un compte, ajouter des utilisateurs et choisir leurs droits, mais rien n’est envoyé ni gardé après un rechargement.</span>
+          <span>Dans cet aperçu, le serveur est simulé : vous pouvez vous connecter, ajouter des utilisateurs et choisir leurs droits, mais rien n’est envoyé ni gardé après un rechargement.</span>
         </div>
       )}
       {connexion === undefined ? <p className="chargement">Chargement…</p> : connexion ? <Connecte connexion={connexion} /> : <FormConnexion />}
@@ -56,55 +57,39 @@ export function PageCompte() {
   );
 }
 
-type Etape = 'connexion' | 'installation' | 'secours' | 'changement' | 'codes' | 'choix';
+type Etape = 'connexion' | 'changement' | 'choix';
 
 /**
- * Connexion par identifiant et mot de passe. Au tout premier lancement du serveur, la même page propose de créer l'administrateur.
- * `apres` s'exécute une fois l'appareil relié.
+ * Connexion par identifiant et mot de passe, donnés par l'administrateur. Ouverte par le lien de connexion, l'application connaît déjà
+ * l'adresse du serveur : il n'y a que ces deux cases à remplir. `apres` s'exécute une fois l'appareil relié.
  */
 export function FormConnexion({ apres }: { apres?: () => void } = {}) {
   const notifier = useNotifier();
-  const [autre, setAutre] = useState<{ message: string; nonEnvoyes: number; session: { jeton: string; identifiant: string }; org: OrganisationServeur } | null>(null);
+  const [autre, setAutre] = useState<{ message: string; nonEnvoyes: number; session: { jeton: string; identifiant: string }; org: OrganisationServeur; motDePasse: string } | null>(null);
   const [url, setUrl] = useState(URL_SERVEUR_DEFAUT);
+  // Tant qu'on ne sait pas si l'application vient du serveur, on n'affiche pas la case de l'adresse.
+  const [adresseConnue, setAdresseConnue] = useState<boolean | null>(URL_SERVEUR_DEFAUT ? true : null);
   const [etape, setEtape] = useState<Etape>('connexion');
-  const [installation, setInstallation] = useState<EtatInstallation | null>(null);
   const [identifiant, setIdentifiant] = useState('');
   const [motDePasse, setMotDePasse] = useState('');
-  const [session, setSession] = useState<(SessionServeur & { codesSecours?: string[] }) | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionServeur | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const [occupe, setOccupe] = useState(false);
-  const [avance, setAvance] = useState(!URL_SERVEUR_DEFAUT);
 
-  // À la reconnexion, l'adresse du serveur déjà utilisée sur cet appareil est reprise.
   useEffect(() => {
     if (URL_SERVEUR_DEFAUT) return;
-    void db.appareil.get('proprietaire').then((l) => {
-      const memorisee = (l?.valeur as { url?: string } | undefined)?.url;
-      if (memorisee) { setUrl((courante) => courante || memorisee); setAvance(false); }
-    });
-  }, []);
-
-  // Le serveur n'a pas encore d'administrateur ? On propose de le créer. Vérifié dès que l'adresse est connue ; pendant la frappe, on attend une pause.
-  const dejaVerifie = useRef(false);
-  useEffect(() => {
-    if (!/^https?:\/\/\S+/.test(url.trim())) return;
     let actuel = true;
-    const verifier = () => {
-      synchro.etatInstallation(url.trim()).then((e) => {
-        if (!actuel) return;
-        setInstallation(e);
-        setEtape((courante) => (e.aInitialiser && courante === 'connexion' ? 'installation' : !e.aInitialiser && courante === 'installation' ? 'connexion' : courante));
-      }).catch(() => { /* serveur injoignable : l'erreur s'affichera à la connexion */ });
-    };
-    if (!dejaVerifie.current) {
-      dejaVerifie.current = true;
-      verifier();
-      return () => { actuel = false; };
-    }
-    const t = setTimeout(verifier, 400);
-    return () => { actuel = false; clearTimeout(t); };
-  }, [url]);
+    void (async () => {
+      // 1. Ouverte par le lien : l'adresse est celle de la page. 2. Sinon, l'adresse déjà utilisée sur cet appareil.
+      const duLien = await synchro.detecterServeur();
+      const memorisee = ((await db.appareil.get('proprietaire'))?.valeur as { url?: string } | undefined)?.url;
+      const trouvee = duLien ?? memorisee ?? '';
+      if (!actuel) return;
+      setUrl((courante) => courante || trouvee);
+      setAdresseConnue(Boolean(trouvee));
+    })();
+    return () => { actuel = false; };
+  }, []);
 
   const executer = async (travail: () => Promise<void>) => {
     setErreur(null);
@@ -118,41 +103,44 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
     }
   };
 
-  const lier = async (s: { jeton: string; identifiant: string }, org: OrganisationServeur, effacer = false) => {
+  const lier = async (s: { jeton: string; identifiant: string }, org: OrganisationServeur, secret: string, effacer = false) => {
     try {
       await synchro.lier(url.trim(), s.jeton, s.identifiant, org, { effacer });
     } catch (e) {
       // L'appareil contenait les données de quelqu'un d'autre : on demande avant d'effacer.
-      if (e instanceof ErreurAppareilAutre) return setAutre({ message: e.message, nonEnvoyes: e.nonEnvoyes, session: s, org });
+      if (e instanceof ErreurAppareilAutre) return setAutre({ message: e.message, nonEnvoyes: e.nonEnvoyes, session: s, org, motDePasse: secret });
       throw e;
     }
+    // L'appareil retient l'empreinte du mot de passe : il pourra le redemander après un moment d'inactivité, même sans réseau.
+    await securite.definirSecret(secret);
     setAutre(null);
+    setMotDePasse('');
     marquerActivite();
-    notifier('Appareil relié ✓');
+    notifier('Connecté ✓');
     if (apres) apres();
     else aller('accueil');
     void synchro.synchroniser();
   };
 
   /** Dernière étape de toute connexion : relier l'appareil (ou choisir l'élevage s'il y en a plusieurs). */
-  const finir = async (s: SessionServeur) => {
-    if (s.organisations.length === 1) return lier(s, s.organisations[0]!);
+  const finir = async (s: SessionServeur, secret: string) => {
+    if (s.organisations.length === 1) return lier(s, s.organisations[0]!, secret);
     setSession(s);
+    setMotDePasse(secret);
     setEtape('choix');
   };
 
   const seConnecter = (e: FormEvent) => {
     e.preventDefault();
-    if (!url.trim()) return setErreur('Indiquez l’adresse du serveur.');
+    if (!url.trim()) return setErreur('Ouvrez l’application avec le lien de connexion donné par votre administrateur.');
     void executer(async () => {
       const s = await synchro.seConnecter(url.trim(), identifiant, motDePasse);
-      setInfo(null);
       // Mot de passe provisoire donné par l'administrateur : il faut d'abord en choisir un à soi.
       if (s.doitChanger) {
         setSession(s);
         return setEtape('changement');
       }
-      await finir(s);
+      await finir(s, motDePasse);
     });
   };
 
@@ -162,7 +150,7 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
         <h3>{autre.message}</h3>
         <p>Pour continuer, ces données doivent être effacées de cet appareil. Ce qui a été envoyé au serveur y reste.</p>
         {autre.nonEnvoyes > 0 && <p className="erreur">Attention : {autre.nonEnvoyes} saisie{autre.nonEnvoyes > 1 ? 's' : ''} faite{autre.nonEnvoyes > 1 ? 's' : ''} sur cet appareil n’a{autre.nonEnvoyes > 1 ? 'ont' : ''} jamais été envoyée{autre.nonEnvoyes > 1 ? 's' : ''} et sera perdue. Reconnectez d’abord la personne concernée pour les envoyer.</p>}
-        <button className="bouton" disabled={occupe} onClick={() => void executer(() => lier(autre.session, autre.org, true))}>Effacer cet appareil et continuer</button>
+        <button className="bouton" disabled={occupe} onClick={() => void executer(() => lier(autre.session, autre.org, autre.motDePasse, true))}>Effacer cet appareil et continuer</button>
         <button className="lien" onClick={() => setAutre(null)}>Annuler</button>
         {erreur && <p className="erreur" role="alert">{erreur}</p>}
       </div>
@@ -174,7 +162,7 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
       <div className="carte">
         <p>Vous avez accès à plusieurs élevages. Lequel utiliser sur cet appareil ?</p>
         {session.organisations.map((o) => (
-          <button key={o.id} className="bouton alt" disabled={occupe} onClick={() => void executer(() => lier(session, o))}>
+          <button key={o.id} className="bouton alt" disabled={occupe} onClick={() => void executer(() => lier(session, o, motDePasse))}>
             {o.nom} · {o.fonction ? `${o.fonction} · ` : ''}{LIBELLES_PROFILS[o.role]}
           </button>
         ))}
@@ -187,7 +175,7 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
     return (
       <FormNouveauMotDePasse
         titre="Choisissez votre mot de passe"
-        introduction="Le mot de passe provisoire donné par votre administrateur ne sert qu’une fois. Choisissez maintenant un mot de passe que vous seul connaissez."
+        introduction="C’est votre première connexion. Choisissez maintenant votre propre mot de passe : vous serez le seul à le connaître, même l’administrateur ne le verra pas."
         identifiant={session.identifiant}
         ancien={motDePasse}
         bouton="Enregistrer et continuer"
@@ -197,178 +185,37 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
           } catch (e) {
             throw new Error(messageErreur(e));
           }
-          setMotDePasse('');
-          await finir({ ...session, doitChanger: false });
+          await finir({ ...session, doitChanger: false }, nouveau);
         }}
         annuler={() => { setEtape('connexion'); setMotDePasse(''); setSession(null); }}
       />
     );
   }
 
-  if (etape === 'codes' && session?.codesSecours) {
-    return (
-      <>
-        <CodesSecours codes={session.codesSecours} bouton="Entrer dans l’application" onFait={() => void executer(async () => { await finir(session); })} />
-        {erreur && <p className="erreur" role="alert">{erreur}</p>}
-      </>
-    );
-  }
-
-  const champUrl = avance ? (
-    <Champ libelle="Adresse du serveur" aide="Donnée par la personne qui installe votre serveur.">
-      <input type="url" inputMode="url" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} required />
-    </Champ>
-  ) : (
-    <button type="button" className="lien" onClick={() => setAvance(true)}>Options avancées</button>
-  );
-
-  if (etape === 'installation') {
-    return (
-      <Installation
-        urlChamp={champUrl} url={url.trim()} cleRequise={installation?.cleRequise ?? false}
-        onCree={(s) => { setSession(s); setEtape('codes'); }}
-        dejaInstalle={() => { setInstallation({ aInitialiser: false, cleRequise: false }); setEtape('connexion'); }}
-        dejaUnCompte={() => setEtape('connexion')}
-      />
-    );
-  }
-
-  if (etape === 'secours') {
-    return (
-      <Secours
-        urlChamp={champUrl} url={url.trim()} identifiantInitial={identifiant}
-        fait={(id) => { setIdentifiant(id); setMotDePasse(''); setInfo('Votre mot de passe est changé. Connectez-vous avec le nouveau.'); setEtape('connexion'); }}
-        retour={() => setEtape('connexion')}
-      />
-    );
-  }
-
   return (
     <>
-      {!apres && (
-        <div className="carte muet">
-          Sans compte, tout fonctionne déjà sur cet appareil. Avec un compte, vos données sont aussi gardées sur le serveur et partagées avec vos aides et votre vétérinaire, sur leurs propres téléphones. Vous pouvez continuer à saisir sans réseau : tout est envoyé dès que la connexion revient.
-        </div>
+      {MODE_APERCU && (
+        <div className="carte muet">Démonstration : identifiant <b>admin</b>, mot de passe provisoire <b>123456</b>. L’application vous demandera ensuite de choisir votre propre mot de passe.</div>
       )}
       <form className="carte" onSubmit={seConnecter}>
-        {info && <p role="status">{info}</p>}
         <Champ libelle="Identifiant" aide="Donné par votre administrateur, par exemple « ndiaye.moussa ».">
           <input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} required />
         </Champ>
         <Champ libelle="Mot de passe"><SaisieMotDePasse valeur={motDePasse} onChange={setMotDePasse} /></Champ>
-        {champUrl}
+        {adresseConnue === false && (
+          <Champ libelle="Adresse du serveur" aide="Le plus simple : ouvrez l’application avec le lien de connexion donné par votre administrateur. Sinon, recopiez ce lien ici.">
+            <input type="url" inputMode="url" placeholder="http://…" value={url} onChange={(e) => setUrl(e.target.value)} required />
+          </Champ>
+        )}
         {erreur && <p className="erreur" role="alert">{erreur}</p>}
         <button className="bouton" disabled={occupe || !identifiant.trim() || !motDePasse}>{occupe ? 'Connexion…' : 'Se connecter'}</button>
         <details className="oubli-mdp">
           <summary className="lien">J’ai oublié mon mot de passe</summary>
-          <p><b>Vous travaillez pour un élevage :</b> demandez à votre administrateur de vous donner un nouveau mot de passe provisoire. Il ne peut pas voir votre mot de passe, mais il peut en créer un nouveau.</p>
-          <p><b>Vous êtes l’administrateur (propriétaire) :</b> utilisez un des codes de secours que vous avez notés à l’installation.</p>
-          <button type="button" className="bouton alt" onClick={() => { setErreur(null); setEtape('secours'); }}>Utiliser un code de secours</button>
+          <p>Demandez à votre administrateur de vous donner un nouveau mot de passe provisoire. Il ne peut pas voir votre mot de passe, mais il peut en créer un nouveau.</p>
+          <p>Vous êtes le propriétaire ? La personne qui a installé l’application peut vous en redonner un depuis l’ordinateur du serveur.</p>
         </details>
-        {installation && !installation.aInitialiser ? null : <button type="button" className="lien" onClick={() => setEtape('installation')}>Première installation : créer l’administrateur</button>}
       </form>
     </>
-  );
-}
-
-function Installation({ urlChamp, url, cleRequise, onCree, dejaInstalle, dejaUnCompte }: {
-  urlChamp: React.ReactNode; url: string; cleRequise: boolean;
-  onCree: (s: SessionServeur & { codesSecours: string[] }) => void; dejaInstalle: () => void; dejaUnCompte: () => void;
-}) {
-  const [cle, setCle] = useState('');
-  const [nomElevage, setNomElevage] = useState('');
-  const [nom, setNom] = useState('');
-  const [identifiant, setIdentifiant] = useState('admin');
-  const [motDePasse, setMotDePasse] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [erreur, setErreur] = useState<string | null>(null);
-  const [occupe, setOccupe] = useState(false);
-
-  const soumettre = async (e: FormEvent) => {
-    e.preventDefault();
-    const id = normaliserIdentifiant(identifiant);
-    const probleme = problemeIdentifiant(id) ?? problemeNouveauMotDePasse(motDePasse, confirmation, id);
-    if (probleme) return setErreur(probleme);
-    if (!url) return setErreur('Indiquez l’adresse du serveur.');
-    setErreur(null);
-    setOccupe(true);
-    try {
-      onCree(await synchro.installer(url, { ...(cle.trim() ? { cle: cle.trim() } : {}), identifiant: id, motDePasse, nom: nom.trim(), nomElevage: nomElevage.trim() }));
-    } catch (err) {
-      if (err instanceof ErreurServeur && err.statut === 409 && /déjà installée/.test(err.message)) return dejaInstalle();
-      setErreur(messageErreur(err));
-    } finally {
-      setOccupe(false);
-    }
-  };
-
-  return (
-    <form className="carte" onSubmit={soumettre}>
-      <h3>Créer l’administrateur</h3>
-      <p>
-        C’est le premier lancement : aucun compte n’existe encore. Le compte que vous créez ici est celui du <b>propriétaire</b> : il peut tout faire et ajoute ensuite les autres personnes.
-        Il n’y a aucun mot de passe par défaut : c’est vous qui choisissez le vôtre.
-      </p>
-      {cleRequise && (
-        <Champ libelle="Clé d’installation" aide="Elle s’affiche dans la fenêtre du serveur au démarrage. Elle empêche qu’une autre personne du réseau crée le compte à votre place.">
-          <input autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={cle} onChange={(e) => setCle(e.target.value)} required />
-        </Champ>
-      )}
-      <Champ libelle="Nom de l’élevage"><input value={nomElevage} onChange={(e) => setNomElevage(e.target.value)} placeholder="Ferme Sow" /></Champ>
-      <Champ libelle="Votre nom"><input autoComplete="name" value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Aminata Sow" /></Champ>
-      <Champ libelle="Votre identifiant" aide="Sans espace ni accent. Vous pouvez garder « admin » ou choisir le vôtre.">
-        <input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} required />
-      </Champ>
-      <Champ libelle="Mot de passe" aide="8 caractères au moins. Choisissez-en un difficile à deviner et ne le partagez avec personne.">
-        <SaisieMotDePasse valeur={motDePasse} onChange={setMotDePasse} nouveau />
-      </Champ>
-      <Champ libelle="Confirmez le mot de passe"><SaisieMotDePasse valeur={confirmation} onChange={setConfirmation} nouveau /></Champ>
-      {urlChamp}
-      {erreur && <p className="erreur" role="alert">{erreur}</p>}
-      <button className="bouton" disabled={occupe || !identifiant.trim() || !motDePasse}>{occupe ? 'Création…' : 'Créer l’administrateur'}</button>
-      <button type="button" className="lien" onClick={dejaUnCompte}>J’ai déjà un compte</button>
-    </form>
-  );
-}
-
-/** Le propriétaire a perdu son mot de passe : un code de secours en permet un nouveau. */
-function Secours({ urlChamp, url, identifiantInitial, fait, retour }: { urlChamp: React.ReactNode; url: string; identifiantInitial: string; fait: (identifiant: string) => void; retour: () => void }) {
-  const [identifiant, setIdentifiant] = useState(identifiantInitial);
-  const [code, setCode] = useState('');
-  const [nouveau, setNouveau] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [erreur, setErreur] = useState<string | null>(null);
-  const [occupe, setOccupe] = useState(false);
-  const soumettre = async (e: FormEvent) => {
-    e.preventDefault();
-    const id = normaliserIdentifiant(identifiant);
-    const probleme = problemeNouveauMotDePasse(nouveau, confirmation, id);
-    if (probleme) return setErreur(probleme);
-    if (!url) return setErreur('Indiquez l’adresse du serveur.');
-    setErreur(null);
-    setOccupe(true);
-    try {
-      await synchro.recupererAcces(url, id, code, nouveau);
-      fait(id);
-    } catch (err) {
-      setErreur(messageErreur(err));
-    } finally {
-      setOccupe(false);
-    }
-  };
-  return (
-    <form className="carte" onSubmit={soumettre}>
-      <h3>Retrouver l’accès avec un code de secours</h3>
-      <p>Entrez un des codes de secours que vous avez notés à l’installation (par exemple <code>k7mq-x9pt-4tnw</code>), puis choisissez un nouveau mot de passe. Chaque code ne sert qu’une fois.</p>
-      <Champ libelle="Identifiant"><input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} required /></Champ>
-      <Champ libelle="Code de secours"><input autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} required /></Champ>
-      <Champ libelle="Nouveau mot de passe"><SaisieMotDePasse valeur={nouveau} onChange={setNouveau} nouveau /></Champ>
-      <Champ libelle="Confirmez le nouveau mot de passe"><SaisieMotDePasse valeur={confirmation} onChange={setConfirmation} nouveau /></Champ>
-      {urlChamp}
-      {erreur && <p className="erreur" role="alert">{erreur}</p>}
-      <button className="bouton" disabled={occupe || !identifiant.trim() || !code.trim() || !nouveau}>{occupe ? 'Vérification…' : 'Choisir ce mot de passe'}</button>
-      <button type="button" className="lien" onClick={retour}>Retour à la connexion</button>
-    </form>
   );
 }
 
@@ -411,7 +258,6 @@ function Connecte({ connexion }: { connexion: Connexion }) {
         </a>
       )}
       <ChangerMotDePasse identifiant={connexion.identifiant} />
-      {connexion.role === 'proprietaire' && <CodesSecoursProprietaire />}
       <div className="carte">
         <button className="lien danger" onClick={() => void quitter()}>Se déconnecter de cet appareil</button>
       </div>
@@ -463,58 +309,11 @@ function ChangerMotDePasse({ identifiant }: { identifiant: string }) {
         } catch (e) {
           throw new Error(messageErreur(e));
         }
+        await securite.definirSecret(nouveau);
         setOuvert(false);
         notifier('Mot de passe changé ✓');
       }}
       annuler={() => setOuvert(false)}
     />
-  );
-}
-
-/** Le propriétaire peut refaire ses codes de secours (par exemple après en avoir perdu la liste) : les anciens cessent de marcher. */
-function CodesSecoursProprietaire() {
-  const confirmer = useConfirmer();
-  const [restants, setRestants] = useState<number | null>(null);
-  const [etape, setEtape] = useState<'repos' | 'mot' | 'codes'>('repos');
-  const [motDePasse, setMotDePasse] = useState('');
-  const [codes, setCodes] = useState<string[]>([]);
-  const [erreur, setErreur] = useState<string | null>(null);
-  useEffect(() => {
-    synchro.monCompte().then((c) => setRestants(c.codesSecoursRestants)).catch(() => undefined);
-  }, [etape]);
-
-  if (etape === 'codes') return <CodesSecours codes={codes} bouton="Terminé" onFait={() => { setCodes([]); setEtape('repos'); }} />;
-  return (
-    <div className="carte">
-      <h3>Codes de secours</h3>
-      <p className="muet">
-        Ils vous permettent de retrouver l’accès si vous perdez votre mot de passe.
-        {restants !== null && ` Il vous en reste ${restants}.`}
-        {restants !== null && restants <= 2 && ' Pensez à en générer de nouveaux.'}
-      </p>
-      {etape === 'repos' ? (
-        <button className="lien" onClick={() => setEtape('mot')}>Générer de nouveaux codes</button>
-      ) : (
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!await confirmer('Les anciens codes de secours cesseront de fonctionner. Continuer ?')) return;
-            try {
-              setCodes(await synchro.genererCodesSecours(motDePasse));
-              setMotDePasse('');
-              setErreur(null);
-              setEtape('codes');
-            } catch (err) {
-              setErreur(messageErreur(err));
-            }
-          }}
-        >
-          <Champ libelle="Votre mot de passe actuel"><SaisieMotDePasse valeur={motDePasse} onChange={setMotDePasse} /></Champ>
-          {erreur && <p className="erreur" role="alert">{erreur}</p>}
-          <button className="bouton alt" disabled={!motDePasse}>Générer de nouveaux codes</button>
-          <button type="button" className="lien" onClick={() => { setEtape('repos'); setMotDePasse(''); setErreur(null); }}>Annuler</button>
-        </form>
-      )}
-    </div>
   );
 }

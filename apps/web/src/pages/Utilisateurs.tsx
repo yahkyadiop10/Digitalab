@@ -99,7 +99,9 @@ function Formulaire({ elevage, identifiant: identifiantInitial }: { elevage: Ele
   const confirmer = useConfirmer();
   const notifier = useNotifier();
   const [existant, setExistant] = useState<Membre | null | undefined>(identifiantInitial ? undefined : null);
+  const connexion = useConnexion();
   const [prenom, setPrenom] = useState('');
+  const [identifiantChoisi, setIdentifiantChoisi] = useState('');
   const [nom, setNom] = useState('');
   const [fonction, setFonction] = useState('');
   const [telephone, setTelephone] = useState('');
@@ -165,7 +167,7 @@ function Formulaire({ elevage, identifiant: identifiantInitial }: { elevage: Ele
         notifier('Enregistré ✓');
         aller('utilisateurs');
       } else {
-        const r = await synchro.ajouterMembre({ ...commun, prenom, nom });
+        const r = await synchro.ajouterMembre({ ...commun, prenom, nom, ...(identifiantChoisi.trim() ? { identifiant: identifiantChoisi.trim() } : {}) });
         setCompte({ compte: r, telephone: normaliserTelephone(telephone), titre: 'Compte créé' });
       }
     } catch (err) {
@@ -190,7 +192,7 @@ function Formulaire({ elevage, identifiant: identifiantInitial }: { elevage: Ele
     return (
       <>
         <Retour vers="utilisateurs" libelle="Utilisateurs" />
-        <MotDePasseProvisoire compte={compte.compte} telephone={compte.telephone} elevage={elevage.reglages.nomElevage || ''} titre={compte.titre}>
+        <MotDePasseProvisoire compte={compte.compte} telephone={compte.telephone} elevage={elevage.reglages.nomElevage || ''} lien={connexion?.url ?? ''} titre={compte.titre}>
           <a className="bouton" href="#/utilisateurs">Terminé</a>
         </MotDePasseProvisoire>
       </>
@@ -209,8 +211,9 @@ function Formulaire({ elevage, identifiant: identifiantInitial }: { elevage: Ele
       ) : (
         <>
           <Champ libelle="Prénom"><input value={prenom} onChange={(e) => setPrenom(e.target.value)} placeholder="Moussa" required /></Champ>
-          <Champ libelle="Nom" aide={`L’identifiant sera créé automatiquement : ${prenom.trim() && nom.trim() ? identifiantDepuisNom(prenom, nom) || '…' : 'nom.prénom'} (un chiffre sera ajouté s’il existe déjà).`}>
-            <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ndiaye" required />
+          <Champ libelle="Nom"><input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ndiaye" required /></Champ>
+          <Champ libelle="Identifiant (facultatif)" aide={`Laissez vide pour « ${prenom.trim() && nom.trim() ? identifiantDepuisNom(prenom, nom) || 'nom.prénom' : 'nom.prénom'} » (un chiffre est ajouté s’il existe déjà), ou choisissez plus court, par exemple « moussa ».`}>
+            <input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={identifiantChoisi} onChange={(e) => setIdentifiantChoisi(e.target.value)} placeholder={prenom.trim() && nom.trim() ? identifiantDepuisNom(prenom, nom) : 'nom.prénom'} />
           </Champ>
         </>
       )}

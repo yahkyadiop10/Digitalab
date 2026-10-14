@@ -1,6 +1,6 @@
 /** Règles des comptes (identifiant et mot de passe), partagées par le serveur et l'application pour que les deux disent la même chose. */
 
-export const MOT_DE_PASSE_MIN = 8;
+export const MOT_DE_PASSE_MIN = 6;
 export const MOT_DE_PASSE_MAX = 128;
 /** Un mot de passe provisoire donné par l'administrateur cesse de fonctionner après ce délai. */
 export const MOT_DE_PASSE_PROVISOIRE_JOURS = 5;
@@ -51,7 +51,8 @@ export function identifiantLibre(base: string, pris: (identifiant: string) => bo
 }
 
 const TROP_COURANTS = new Set([
-  '12345678', '123456789', '1234567890', '87654321', '11111111', '00000000', 'password', 'password1', 'motdepasse', 'motdepasse1', 'azertyui', 'azerty123',
+  '123456', '654321', '111111', '000000', '121212', '123123', 'azerty', 'qwerty', 'abcdef', 'abc123', 'passer', 'senegal', 'dakar1', 'poulet', 'soleil',
+  'bonjour', 'avimaster', 'admin1', 'motdep', '12345678', '123456789', '1234567890', '87654321', '11111111', '00000000', 'password', 'password1', 'motdepasse', 'motdepasse1', 'azertyui', 'azerty123',
   'azertyuiop', 'qwertyui', 'qwerty123', 'abcd1234', 'admin123', 'administrateur', 'bienvenue', 'senegal1', 'senegal123', 'dakar123', 'passer123',
 ]);
 
@@ -61,7 +62,7 @@ export function problemeMotDePasse(motDePasse: string, identifiant = ''): string
   if (motDePasse.length > MOT_DE_PASSE_MAX) return `Le mot de passe est trop long (${MOT_DE_PASSE_MAX} caractères au plus).`;
   const bas = motDePasse.toLowerCase();
   if (TROP_COURANTS.has(bas)) return 'Ce mot de passe est trop courant. Choisissez-en un autre, plus difficile à deviner.';
-  if (new Set(bas).size < 4) return 'Ce mot de passe est trop simple : variez les caractères.';
+  if (new Set(bas).size < 3) return 'Ce mot de passe est trop simple : variez les caractères.';
   if (identifiant && (bas === identifiant.toLowerCase() || (identifiant.length >= 4 && bas.includes(identifiant.toLowerCase())))) return 'Le mot de passe ne doit pas contenir votre identifiant.';
   return null;
 }

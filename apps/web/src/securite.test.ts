@@ -23,71 +23,61 @@ describe('SHA-256 de secours', () => {
   });
 });
 
-describe('code de verrouillage', () => {
-  it('ne garde jamais le code, seulement une empreinte', async () => {
+describe('mot de passe retenu par l’appareil (pour le redemander sans réseau)', () => {
+  it('ne garde jamais le mot de passe, seulement une empreinte', async () => {
     const s = nouvelle();
-    await s.definirCode('2580');
+    expect(await s.aUnSecret()).toBe(false);
+    await s.definirSecret('poule7');
     const ligne = JSON.stringify(await base.appareil.get('verrou'));
-    expect(ligne).not.toContain('2580');
-    expect(await s.aUnCode()).toBe(true);
+    expect(ligne).not.toContain('poule7');
+    expect(await s.aUnSecret()).toBe(true);
   });
 
-  it('accepte le bon code et refuse un mauvais', async () => {
+  it('accepte le bon mot de passe et refuse un mauvais', async () => {
     const s = nouvelle();
-    await s.definirCode('2580');
-    expect((await s.verifier('2580')).ok).toBe(true);
-    expect(await s.verifier('1357')).toMatchObject({ ok: false, restants: 9 });
+    await s.definirSecret('poule7');
+    expect((await s.verifier('poule7')).ok).toBe(true);
+    expect(await s.verifier('poule8')).toMatchObject({ ok: false, restants: 9 });
   });
 
-  it('refuse un code trop simple', async () => {
-    await expect(nouvelle().definirCode('1234')).rejects.toBeInstanceOf(ErreurCode);
-    await expect(nouvelle().definirCode('12')).rejects.toBeInstanceOf(ErreurCode);
+  it('sans empreinte, ne valide rien sur l’appareil (le serveur tranchera)', async () => {
+    expect(await nouvelle().verifier('poule7')).toEqual({ ok: false });
   });
 
-  it('exige l’ancien code pour en changer', async () => {
+  it('un nouveau mot de passe remplace l’ancien', async () => {
     const s = nouvelle();
-    await s.definirCode('2580');
-    await expect(s.definirCode('7391')).rejects.toThrow(/ancien code/);
-    await expect(s.definirCode('7391', '0000')).rejects.toThrow(/ancien code/);
-    await s.definirCode('7391', '2580');
-    expect((await s.verifier('7391')).ok).toBe(true);
-    expect((await s.verifier('2580')).ok).toBe(false);
+    await s.definirSecret('poule7');
+    await s.definirSecret('canard9');
+    expect((await s.verifier('canard9')).ok).toBe(true);
+    expect((await s.verifier('poule7')).ok).toBe(false);
+    await expect(s.definirSecret('')).rejects.toBeInstanceOf(ErreurCode);
   });
 
   it('impose une attente après cinq échecs, qui s’allonge, puis une vraie reconnexion après dix', async () => {
     const s = nouvelle();
-    await s.definirCode('2580');
-    for (let i = 0; i < 4; i++) expect(await s.verifier('0001')).toMatchObject({ ok: false });
-    expect(await s.verifier('0001')).toMatchObject({ ok: false, attenteSecondes: 30 });
-    // Pendant l'attente, même le bon code est refusé.
-    expect(await s.verifier('2580')).toMatchObject({ ok: false, attenteSecondes: expect.any(Number) });
+    await s.definirSecret('poule7');
+    for (let i = 0; i < 4; i++) expect(await s.verifier('faux')).toMatchObject({ ok: false });
+    expect(await s.verifier('faux')).toMatchObject({ ok: false, attenteSecondes: 30 });
+    // Pendant l'attente, même le bon mot de passe est refusé.
+    expect(await s.verifier('poule7')).toMatchObject({ ok: false, attenteSecondes: expect.any(Number) });
     horloge += 31_000;
-    expect(await s.verifier('0001')).toMatchObject({ ok: false, attenteSecondes: 60 });
+    expect(await s.verifier('faux')).toMatchObject({ ok: false, attenteSecondes: 60 });
     horloge += 61_000;
     for (let i = 0; i < 3; i++) {
-      await s.verifier('0001');
+      await s.verifier('faux');
       horloge += 900_000;
     }
-    expect(await s.verifier('0001')).toMatchObject({ ok: false, reconnexionRequise: true });
+    expect(await s.verifier('faux')).toMatchObject({ ok: false, reconnexionRequise: true });
   });
 
-  it('un bon code remet les échecs à zéro', async () => {
+  it('un bon mot de passe remet les échecs à zéro, et l’empreinte peut être oubliée', async () => {
     const s = nouvelle();
-    await s.definirCode('2580');
-    await s.verifier('0001');
-    await s.verifier('0002');
-    expect((await s.verifier('2580')).ok).toBe(true);
-    expect(await s.verifier('0001')).toMatchObject({ restants: 9 });
-  });
-
-  it('peut retirer le code avec le bon code, ou l’oublier', async () => {
-    const s = nouvelle();
-    await s.definirCode('2580');
-    await expect(s.retirerCode('0001')).rejects.toBeInstanceOf(ErreurCode);
-    await s.retirerCode('2580');
-    expect(await s.aUnCode()).toBe(false);
-    await s.definirCode('2580');
-    await s.oublierCode();
-    expect(await s.aUnCode()).toBe(false);
+    await s.definirSecret('poule7');
+    await s.verifier('faux1');
+    await s.verifier('faux2');
+    expect((await s.verifier('poule7')).ok).toBe(true);
+    expect(await s.verifier('faux1')).toMatchObject({ restants: 9 });
+    await s.oublierSecret();
+    expect(await s.aUnSecret()).toBe(false);
   });
 });

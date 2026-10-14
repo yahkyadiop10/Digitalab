@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { etatSession, type EtatSession, type PolitiqueSession } from '@digitalab/core';
 
 const CLE = 'avimaster.derniereActivite';
@@ -29,30 +29,20 @@ const PERIODE_VERIFICATION_MS = 5_000;
 const PAS_ECRITURE_MS = 2_000;
 
 /**
- * Surveille l'inactivité : verrouille l'écran, puis demande la déconnexion. Seule une action sur une session encore active compte :
- * toucher l'écran de verrouillage ne le déverrouille pas, il faut le code.
+ * Surveille l'inactivité : après le délai, l'application redemande le mot de passe. Seule une action sur une session encore active compte :
+ * toucher l'écran de verrouillage ne le déverrouille pas, il faut le mot de passe.
  */
-export function useSession({ active, politique, connecte, surDeconnexion }: { active: boolean; politique: PolitiqueSession; connecte: boolean; surDeconnexion: () => void }) {
+export function useSession({ active, politique }: { active: boolean; politique: PolitiqueSession }) {
   const [etat, setEtat] = useState<EtatSession>('actif');
-  const declenche = useRef(false);
-  const surDeconnexionRef = useRef(surDeconnexion);
-  surDeconnexionRef.current = surDeconnexion;
 
   useEffect(() => {
     if (!active) {
       setEtat('actif');
-      declenche.current = false;
       return;
     }
     let derniereEcriture = 0;
     const evaluer = () => {
-      const e = etatSession(derniereActivite(), Date.now(), politique);
-      setEtat(e);
-      if (e !== 'deconnecte') declenche.current = false;
-      else if (connecte && !declenche.current) {
-        declenche.current = true;
-        surDeconnexionRef.current();
-      }
+      setEtat(etatSession(derniereActivite(), Date.now(), politique));
     };
     const activite = () => {
       const t = Date.now();
@@ -74,7 +64,7 @@ export function useSession({ active, politique, connecte, surDeconnexion }: { ac
       window.removeEventListener('focus', evaluer);
       window.removeEventListener('pageshow', evaluer);
     };
-  }, [active, politique.verrouillageMin, politique.deconnexionMin, connecte]);
+  }, [active, politique.verrouillageMin]);
 
   /** Verrouille tout de suite (le temps écoulé compte alors comme si le délai de verrouillage était passé). */
   const verrouiller = useCallback(() => {
@@ -84,7 +74,6 @@ export function useSession({ active, politique, connecte, surDeconnexion }: { ac
 
   const deverrouiller = useCallback(() => {
     marquerActivite();
-    declenche.current = false;
     setEtat('actif');
   }, []);
 

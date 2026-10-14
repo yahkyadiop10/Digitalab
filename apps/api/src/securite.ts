@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomInt, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import { createHash, randomBytes, randomInt, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 
 /** Jeton de session aléatoire, à renvoyer une seule fois à l'appareil. */
 export const genererJeton = (): string => randomBytes(32).toString('base64url');
@@ -44,23 +44,7 @@ export async function verifierMotDePasse(motDePasse: string, empreinte: string):
   return attendue.length === calculee.length && timingSafeEqual(attendue, calculee);
 }
 
-/* ---------- Mots de passe provisoires et codes de secours ---------- */
+/* ---------- Mot de passe provisoire ---------- */
 
-// Sans 0/o, 1/l/i, 5/s, 2/z, 8/b : on les dicte au téléphone ou on les recopie à la main.
-const ALPHABET_LISIBLE = 'acdefghjkmnpqrtuvwxy34679';
-
-/** Trois groupes de quatre caractères (60 bits), par exemple « k7mq-x9pt-4tnw ». */
-export function genererMotDePasseProvisoire(): string {
-  const groupe = () => Array.from({ length: 4 }, () => ALPHABET_LISIBLE[randomInt(ALPHABET_LISIBLE.length)]).join('');
-  return `${groupe()}-${groupe()}-${groupe()}`;
-}
-
-export const genererCodeSecours = genererMotDePasseProvisoire;
-
-/** Un code de secours se recopie : on ignore majuscules, espaces et tirets. */
-export const normaliserCodeSecours = (code: string): string => code.toLowerCase().replace(/[\s-]/g, '');
-
-export const empreinteCodeSecours = (secret: string, code: string): string => createHmac('sha256', secret).update(`secours:${normaliserCodeSecours(code)}`).digest('hex');
-
-/** Clé d'installation affichée dans la console du serveur : on ignore casse, espaces et tirets. */
-export const normaliserCle = normaliserCodeSecours;
+/** Six chiffres, faciles à dicter au téléphone. Ils ne servent qu'à la première connexion, quelques jours au plus, et l'identifiant est bloqué après 5 erreurs. */
+export const genererMotDePasseProvisoire = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0');

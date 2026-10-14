@@ -4,7 +4,7 @@ import {
 } from '@digitalab/core';
 
 /**
- * Faux serveur qui vit dans la page : il sert à essayer la création de l'administrateur, les mots de passe et la gestion des utilisateurs dans l'aperçu,
+ * Faux serveur qui vit dans la page : il sert à essayer la connexion, les mots de passe et la gestion des utilisateurs dans l'aperçu,
  * où aucun vrai serveur n'est joignable. Il ne garde rien après un rechargement et n'échange aucune donnée d'élevage.
  * (Il n'a pas la sécurité du vrai serveur : pas de blocage après des échecs, mots de passe gardés en clair dans la page.)
  */
@@ -14,14 +14,13 @@ interface CompteDemo extends DroitsMembre {
   telephone: string | null;
   motDePasse: string;
   provisoire: boolean;
-  codesSecours: { code: string; utilise: boolean }[];
 }
 
-export const URL_SERVEUR_APERCU = 'https://serveur-demonstration.digitalab';
+export const URL_SERVEUR_APERCU = 'https://mon-elevage.avimaster.demo';
 
-const ALPHABET = 'acdefghjkmnpqrtuvwxy34679';
-const groupe = () => Array.from({ length: 4 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
-const codeAleatoire = () => `${groupe()}-${groupe()}-${groupe()}`;
+/** Compte de l'aperçu, comme celui que le vrai serveur crée à son premier démarrage. */
+export const ADMIN_APERCU = { identifiant: 'admin', motDePasseProvisoire: '123456' };
+const codeAleatoire = () => String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
 
 export function creerServeurDemo() {
   const comptes = new Map<string, CompteDemo>();
@@ -45,6 +44,13 @@ export function creerServeurDemo() {
     noter(awa, 'annulation', 'mouvements', 'décès · 2 animaux', 60);
     noter(awa, 'creation', 'pontes', '51 œufs', 30, 240);
   };
+
+  const patron: CompteDemo = {
+    identifiant: ADMIN_APERCU.identifiant, nom: null, telephone: null, motDePasse: ADMIN_APERCU.motDePasseProvisoire, provisoire: true,
+    role: 'proprietaire', droits: droitsEffectifs('proprietaire', null), zones: [],
+  };
+  comptes.set(patron.identifiant, patron);
+  amorcer(patron);
 
   const repondre = (statut: number, corps: unknown) => new Response(JSON.stringify(corps), { status: statut, headers: { 'content-type': 'application/json' } });
   const erreur = (statut: number, message: string, code?: string) => repondre(statut, { erreur: message, ...(code ? { code } : {}) });
@@ -71,44 +77,12 @@ export function creerServeurDemo() {
     const jeton = (new Headers(init?.headers).get('authorization') ?? '').replace('Bearer ', '');
     const moiCompte = sessions.has(jeton) ? comptes.get(sessions.get(jeton)!) : undefined;
 
-    if (chemin === '/v1/installation' && methode === 'GET') return repondre(200, { aInitialiser: comptes.size === 0, cleRequise: false });
-
-    if (chemin === '/v1/installation') {
-      if (comptes.size > 0) return erreur(409, 'L’application est déjà installée. Connectez-vous avec votre identifiant.');
-      const identifiant = normaliserIdentifiant(String(corps['identifiant'] ?? ''));
-      const motDePasse = String(corps['motDePasse'] ?? '');
-      const probleme = problemeIdentifiant(identifiant) ?? problemeMotDePasse(motDePasse, identifiant);
-      if (probleme) return erreur(400, probleme);
-      const m: CompteDemo = {
-        identifiant, nom: String(corps['nom'] ?? '').trim() || null, telephone: null, motDePasse, provisoire: false, role: 'proprietaire', droits: droitsEffectifs('proprietaire', null), zones: [],
-        codesSecours: Array.from({ length: 8 }, () => ({ code: codeAleatoire(), utilise: false })),
-      };
-      comptes.set(identifiant, m);
-      organisation.nom = String(corps['nomElevage'] ?? '').trim() || organisation.nom;
-      amorcer(m);
-      noter(m, 'utilisateur', 'utilisateurs', 'a créé le compte administrateur de l’élevage');
-      return repondre(200, { jeton: ouvrir(m), utilisateur: publique(m), doitChanger: false, organisations: [orga(m)], codesSecours: m.codesSecours.map((c) => c.code) });
-    }
+    if (chemin === '/v1/sante') return repondre(200, { ok: true });
 
     if (chemin === '/v1/auth/connexion') {
       const m = comptes.get(normaliserIdentifiant(String(corps['identifiant'] ?? '')));
       if (!m || !juste(m, String(corps['motDePasse'] ?? ''))) return erreur(401, 'Identifiant ou mot de passe incorrect.');
       return repondre(200, { jeton: ouvrir(m), utilisateur: publique(m), doitChanger: m.provisoire, organisations: [orga(m)] });
-    }
-
-    if (chemin === '/v1/auth/secours') {
-      const m = comptes.get(normaliserIdentifiant(String(corps['identifiant'] ?? '')));
-      const saisi = String(corps['code'] ?? '').toLowerCase().replace(/[\s-]/g, '');
-      const probleme = problemeMotDePasse(String(corps['nouveauMotDePasse'] ?? ''), m?.identifiant);
-      if (probleme) return erreur(400, probleme);
-      const code = m?.codesSecours.find((c) => !c.utilise && c.code.replace(/-/g, '') === saisi);
-      if (!m || !code) return erreur(401, 'Identifiant ou code de secours incorrect.');
-      code.utilise = true;
-      m.motDePasse = String(corps['nouveauMotDePasse']);
-      m.provisoire = false;
-      finirSessions(m.identifiant);
-      noter(m, 'utilisateur', 'utilisateurs', 'a utilisé un code de secours pour choisir un nouveau mot de passe');
-      return repondre(200, { ok: true, codesRestants: m.codesSecours.filter((c) => !c.utilise).length });
     }
 
     if (chemin === '/v1/auth/deconnexion') {
@@ -120,7 +94,7 @@ export function creerServeurDemo() {
     const m0 = moiCompte;
 
     if (chemin === '/v1/moi' && methode === 'GET') {
-      return repondre(200, { utilisateur: { ...publique(m0), doitChanger: m0.provisoire }, organisations: [orga(m0)], codesSecoursRestants: m0.codesSecours.filter((c) => !c.utilise).length });
+      return repondre(200, { utilisateur: { ...publique(m0), doitChanger: m0.provisoire }, organisations: [orga(m0)] });
     }
 
     if (chemin === '/v1/moi/mot-de-passe') {
@@ -148,14 +122,6 @@ export function creerServeurDemo() {
         m0.telephone = tel;
       }
       return repondre(200, { ok: true });
-    }
-
-    if (chemin === '/v1/moi/codes-secours') {
-      if (m0.role !== 'proprietaire') return erreur(403, 'Seul le propriétaire a des codes de secours.');
-      if (String(corps['motDePasse'] ?? '') !== m0.motDePasse) return erreur(400, 'Mot de passe incorrect.');
-      m0.codesSecours = Array.from({ length: 8 }, () => ({ code: codeAleatoire(), utilise: false }));
-      noter(m0, 'utilisateur', 'utilisateurs', 'a généré de nouveaux codes de secours');
-      return repondre(200, { codesSecours: m0.codesSecours.map((c) => c.code) });
     }
 
     const estAdmin = m0.droits.includes('admin.utilisateurs');
@@ -208,7 +174,7 @@ export function creerServeurDemo() {
       }
       if (methode === 'POST' && cible && action === 'mot-de-passe') {
         if (cible.identifiant === m0.identifiant) return erreur(400, 'Pour changer votre propre mot de passe, utilisez « Compte ».');
-        if (cible.role === 'proprietaire') return erreur(403, 'Le mot de passe du propriétaire ne se réinitialise pas ici : il utilise ses codes de secours.');
+        if (cible.role === 'proprietaire') return erreur(403, 'Le mot de passe du propriétaire ne se réinitialise pas ici : la personne qui a installé l’application peut lui en redonner un depuis l’ordinateur du serveur.');
         cible.motDePasse = codeAleatoire();
         cible.provisoire = true;
         finirSessions(cible.identifiant);
@@ -240,11 +206,14 @@ export function creerServeurDemo() {
         }
         const prenom = String(corps['prenom'] ?? '').trim();
         const nom = String(corps['nom'] ?? '').trim();
-        const base = identifiantDepuisNom(prenom, nom);
+        const choisi = String(corps['identifiant'] ?? '').trim() ? normaliserIdentifiant(String(corps['identifiant'])) : null;
+        if (choisi && problemeIdentifiant(choisi)) return erreur(400, problemeIdentifiant(choisi)!);
+        if (choisi && comptes.has(choisi)) return erreur(409, `L’identifiant « ${choisi} » est déjà pris. Choisissez-en un autre.`);
+        const base = choisi ?? identifiantDepuisNom(prenom, nom);
         if (!prenom || !nom || problemeIdentifiant(base)) return erreur(400, 'Le nom et le prénom doivent contenir des lettres.');
         const identifiant = identifiantLibre(base, (x) => comptes.has(x));
         const neuf: CompteDemo = {
-          identifiant, nom: `${prenom} ${nom}`, telephone: tel, motDePasse: codeAleatoire(), provisoire: true, role, droits, zones, codesSecours: [],
+          identifiant, nom: `${prenom} ${nom}`, telephone: tel, motDePasse: codeAleatoire(), provisoire: true, role, droits, zones,
           ...(fonction ? { fonction } : {}),
         };
         comptes.set(identifiant, neuf);

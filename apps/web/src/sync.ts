@@ -44,6 +44,8 @@ export interface Membre {
 /** Ce que l'administrateur remplit pour ajouter ou modifier une personne. */
 export interface FicheMembre {
   prenom?: string;
+  /** À la création : identifiant choisi par l'administrateur ; sinon le serveur propose nom.prénom. */
+  identifiant?: string;
   nom?: string;
   telephone?: string;
   fonction?: string;
@@ -60,21 +62,6 @@ export interface SessionServeur {
   /** Mot de passe provisoire : la personne doit en choisir un autre avant tout le reste. */
   doitChanger: boolean;
   organisations: OrganisationServeur[];
-}
-
-export interface EtatInstallation {
-  /** Aucun administrateur n'existe encore : l'écran « Créer l'administrateur » s'affiche. */
-  aInitialiser: boolean;
-  /** Le serveur demande la clé affichée dans sa console. */
-  cleRequise: boolean;
-}
-
-export interface FicheInstallation {
-  cle?: string;
-  identifiant: string;
-  motDePasse: string;
-  nom?: string;
-  nomElevage?: string;
 }
 
 /** Compte créé ou réinitialisé : le mot de passe provisoire n'est montré qu'une fois. */
@@ -265,19 +252,6 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
   return {
     lire,
 
-    /** Le serveur a-t-il déjà un administrateur ? Sinon, on propose de le créer. */
-    async etatInstallation(url: string): Promise<EtatInstallation> {
-      return appeler(url, '/v1/installation');
-    },
-
-    /** Premier lancement : crée l'administrateur et l'élevage. Renvoie aussi les codes de secours, montrés une seule fois. */
-    async installer(url: string, fiche: FicheInstallation): Promise<SessionServeur & { codesSecours: string[] }> {
-      const r = await appeler<{ jeton: string; utilisateur: { identifiant: string; nom: string | null }; doitChanger: boolean; organisations: OrganisationServeur[]; codesSecours: string[] }>(
-        url, '/v1/installation', { corps: { ...fiche, appareil: nomAppareil() } },
-      );
-      return { jeton: r.jeton, identifiant: r.utilisateur.identifiant, nom: r.utilisateur.nom, doitChanger: r.doitChanger, organisations: r.organisations, codesSecours: r.codesSecours };
-    },
-
     async seConnecter(url: string, identifiant: string, motDePasse: string): Promise<SessionServeur> {
       const r = await appeler<{ jeton: string; utilisateur: { identifiant: string; nom: string | null }; doitChanger: boolean; organisations: OrganisationServeur[] }>(
         url, '/v1/auth/connexion', { corps: { identifiant: identifiant.trim(), motDePasse, appareil: nomAppareil() } },
@@ -285,14 +259,39 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       return { jeton: r.jeton, identifiant: r.utilisateur.identifiant, nom: r.utilisateur.nom, doitChanger: r.doitChanger, organisations: r.organisations };
     },
 
+    /**
+     * L'application est-elle servie par le serveur lui-même (on l'a ouverte par le lien de connexion) ? Alors c'est son adresse :
+     * la personne n'a rien à taper. Renvoie `null` sinon (application ouverte ailleurs, ou serveur injoignable).
+     */
+    async detecterServeur(): Promise<string | null> {
+      if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return null;
+      try {
+        // Réponse courte attendue : on ne fait pas patienter le premier écran plus de quelques secondes.
+        const rep = await f(`${location.origin}/v1/sante`, { signal: AbortSignal.timeout(4000) });
+        const corps = rep.ok ? ((await rep.json().catch(() => null)) as { ok?: boolean } | null) : null;
+        return corps?.ok === true ? location.origin : null;
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * Le mot de passe saisi à l'écran de verrouillage n'est pas celui que l'appareil connaît (changé sur un autre téléphone, réinitialisé…) :
+     * on le vérifie auprès du serveur. S'il est bon, l'appareil reçoit une session neuve. `provisoire` : l'administrateur en a donné un nouveau,
+     * la personne doit se reconnecter pour choisir le sien.
+     */
+    async renouvelerSession(motDePasse: string): Promise<'ok' | 'provisoire'> {
+      const c = await lire();
+      if (!c) throw new ErreurReseau('Non connecté.');
+      const r = await appeler<{ jeton: string; doitChanger: boolean }>(c.url, '/v1/auth/connexion', { corps: { identifiant: c.identifiant, motDePasse, appareil: nomAppareil() } });
+      if (r.doitChanger) return 'provisoire';
+      await base.connexion.update('serveur', { jeton: r.jeton });
+      return 'ok';
+    },
+
     /** Choisir son mot de passe personnel avec la session reçue à la connexion (avant de relier l'appareil). */
     async choisirMotDePasse(url: string, jeton: string, ancien: string, nouveau: string): Promise<void> {
       await appeler(url, '/v1/moi/mot-de-passe', { jeton, corps: { ancien, nouveau } });
-    },
-
-    /** Mot de passe du propriétaire perdu : un code de secours noté à l'installation en permet un nouveau. */
-    async recupererAcces(url: string, identifiant: string, code: string, nouveauMotDePasse: string): Promise<{ codesRestants: number }> {
-      return appeler(url, '/v1/auth/secours', { corps: { identifiant: identifiant.trim(), code: code.trim(), nouveauMotDePasse } });
     },
 
     /**
@@ -320,7 +319,6 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
         { cle: 'compteRequis', valeur: true },
         { cle: 'proprietaire', valeur: { organisationId: org.id, identifiant, url: url.replace(/\/+$/, ''), nonEnvoyes: 0 } satisfies ProprietaireAppareil },
       ]);
-      await base.appareil.delete('deconnecteAuto');
       await base.reglages.put({ cle: 'demarrageFait', valeur: true });
       const local = await base.reglages.get('nomElevage');
       const nomLocal = typeof local?.valeur === 'string' ? local.valeur.trim() : '';
@@ -339,9 +337,9 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
 
     /**
      * Quitte le compte sur cet appareil : le jeton est détruit ici et sur le serveur. Les données restent sur l'appareil mais ne s'ouvrent
-     * qu'après une nouvelle connexion. Avec `auto`, la page de connexion explique qu'il s'agit d'une déconnexion pour inactivité.
+     * qu'après une nouvelle connexion.
      */
-    async deconnecter(options: { auto?: boolean } = {}): Promise<void> {
+    async deconnecter(): Promise<void> {
       const c = await lire();
       if (!c) return;
       const nonEnvoyes = (await modifications(c.dernierEnvoi, c.droits)).length;
@@ -353,7 +351,7 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       await base.connexion.delete('serveur');
       await base.appareil.put({ cle: 'proprietaire', valeur: { organisationId: c.organisationId, identifiant: c.identifiant, url: c.url, nonEnvoyes } satisfies ProprietaireAppareil });
       await base.appareil.put({ cle: 'compteRequis', valeur: true });
-      if (options.auto) await base.appareil.put({ cle: 'deconnecteAuto', valeur: true });
+      await base.appareil.delete('verrou');
     },
 
     /** Retire de cet appareil tout ce qui touche à l'élevage, au compte et au code : il repart comme neuf. */
@@ -369,12 +367,11 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       return (await appeler<{ membres: Membre[] }>(c.url, `/v1/organisations/${c.organisationId}/membres`, { jeton: c.jeton })).membres;
     },
 
-    /** Mon compte : coordonnées et nombre de codes de secours qui restent (propriétaire). */
-    async monCompte(): Promise<{ identifiant: string; nom: string | null; telephone: string | null; codesSecoursRestants: number }> {
+    /** Mon compte : nom et téléphone de contact. */
+    async monCompte(): Promise<{ identifiant: string; nom: string | null; telephone: string | null }> {
       const c = await lire();
       if (!c) throw new ErreurReseau('Non connecté.');
-      const r = await appeler<{ utilisateur: { identifiant: string; nom: string | null; telephone: string | null }; codesSecoursRestants: number }>(c.url, '/v1/moi', { jeton: c.jeton });
-      return { ...r.utilisateur, codesSecoursRestants: r.codesSecoursRestants };
+      return (await appeler<{ utilisateur: { identifiant: string; nom: string | null; telephone: string | null } }>(c.url, '/v1/moi', { jeton: c.jeton })).utilisateur;
     },
 
     /** Ajoute une personne : le serveur crée son identifiant et un mot de passe provisoire, à lui remettre (il n'est montré qu'une fois). */
@@ -422,13 +419,6 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       const c = await lire();
       if (!c) throw new ErreurReseau('Non connecté.');
       await appeler(c.url, '/v1/moi/mot-de-passe', { jeton: c.jeton, corps: { ancien, nouveau } });
-    },
-
-    /** Propriétaire : de nouveaux codes de secours (les anciens cessent de marcher). Ils ne sont montrés qu'une fois. */
-    async genererCodesSecours(motDePasse: string): Promise<string[]> {
-      const c = await lire();
-      if (!c) throw new ErreurReseau('Non connecté.');
-      return (await appeler<{ codesSecours: string[] }>(c.url, '/v1/moi/codes-secours', { jeton: c.jeton, corps: { motDePasse } })).codesSecours;
     },
 
     /** Journal d'activité, du plus récent au plus ancien ; `avant` est l'identifiant de la dernière ligne déjà reçue. */

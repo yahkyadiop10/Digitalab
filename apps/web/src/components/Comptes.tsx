@@ -66,7 +66,7 @@ export function FormNouveauMotDePasse({ titre, introduction, identifiant, ancien
       {titre && <h3>{titre}</h3>}
       {introduction && <p>{introduction}</p>}
       {ancienDemande && <Champ libelle="Mot de passe actuel"><SaisieMotDePasse valeur={actuel} onChange={setActuel} /></Champ>}
-      <Champ libelle="Nouveau mot de passe" aide="8 caractères au moins. Une phrase facile à retenir, avec des chiffres, est ce qu’il y a de mieux.">
+      <Champ libelle="Nouveau mot de passe" aide="6 caractères au moins. Par exemple un mot facile à retenir pour vous, avec des chiffres.">
         <SaisieMotDePasse valeur={nouveau} onChange={setNouveau} nouveau />
       </Champ>
       <Champ libelle="Confirmez le nouveau mot de passe"><SaisieMotDePasse valeur={confirmation} onChange={setConfirmation} nouveau /></Champ>
@@ -86,72 +86,29 @@ const copier = async (texte: string): Promise<boolean> => {
   }
 };
 
-/** Les codes de secours du propriétaire : montrés une seule fois, à noter sur papier. */
-export function CodesSecours({ codes, onFait, bouton = 'Continuer' }: { codes: string[]; onFait: () => void; bouton?: string }) {
-  const notifier = useNotifier();
-  const [note, setNote] = useState(false);
-  return (
-    <div className="carte">
-      <h3>Vos codes de secours</h3>
-      <p>
-        Si vous perdez votre mot de passe, un de ces codes vous permettra d’en choisir un nouveau. <b>Notez-les maintenant sur papier</b> et gardez-les en lieu sûr : ils ne seront plus affichés.
-        Chaque code ne sert qu’une fois.
-      </p>
-      <ol className="codes-secours">
-        {codes.map((c) => <li key={c}><code>{c}</code></li>)}
-      </ol>
-      <button type="button" className="bouton alt" onClick={async () => notifier((await copier(codes.join('\n'))) ? 'Codes copiés' : 'Copie impossible : recopiez-les à la main')}>Copier les codes</button>
-      <label className="case"><input type="checkbox" checked={note} onChange={(e) => setNote(e.target.checked)} /> J’ai noté mes codes de secours en lieu sûr</label>
-      <button className="bouton" disabled={!note} onClick={onFait}>{bouton}</button>
-    </div>
-  );
-}
-
-/** Mot de passe provisoire d'une personne, à lui remettre : il n'est montré qu'une fois. */
-export function MotDePasseProvisoire({ compte, telephone, elevage, titre, children }: { compte: CompteProvisoire; telephone?: string | null; elevage: string; titre: string; children?: React.ReactNode }) {
+/** Accès d'une personne, à lui remettre : le lien, son identifiant et son mot de passe provisoire (montré une seule fois). */
+export function MotDePasseProvisoire({ compte, telephone, elevage, lien, titre, children }: {
+  compte: CompteProvisoire; telephone?: string | null; elevage: string; lien: string; titre: string; children?: React.ReactNode;
+}) {
   const notifier = useNotifier();
   const jours = Math.max(1, Math.round((Date.parse(compte.expireLe) - Date.now()) / 86_400_000));
-  const message = `Bonjour${compte.nom ? ` ${compte.nom}` : ''}, voici votre accès à l’élevage ${elevage} dans l’application AviMaster. Identifiant : ${compte.identifiant} · Mot de passe provisoire : ${compte.motDePasseProvisoire} (valable ${jours} jours). À la première connexion, l’application vous demandera de choisir votre propre mot de passe.`;
+  const acces = `Lien : ${lien}\nIdentifiant : ${compte.identifiant}\nMot de passe provisoire : ${compte.motDePasseProvisoire}`;
+  const message = `Bonjour${compte.nom ? ` ${compte.nom}` : ''}, voici votre accès à l’élevage ${elevage} dans l’application AviMaster.\n${acces}\n(valable ${jours} jours). À la première connexion, l’application vous demandera de choisir votre propre mot de passe.`;
   return (
     <div className="carte">
       <h2>{titre}</h2>
+      <p>À remettre à <b>{compte.nom ?? compte.identifiant}</b> :</p>
+      <div className="ligne"><span>Lien de connexion</span><b className="lien-acces">{lien}</b></div>
       <div className="ligne"><span>Identifiant</span><b>{compte.identifiant}</b></div>
       <p className="muet">Mot de passe provisoire :</p>
-      <p className="gros-mdp" aria-label={`Mot de passe provisoire ${compte.motDePasseProvisoire}`}>{compte.motDePasseProvisoire}</p>
+      <p className="gros-code" aria-label={`Mot de passe provisoire ${compte.motDePasseProvisoire.split('').join(' ')}`}>{compte.motDePasseProvisoire}</p>
       <p>
-        Remettez ces deux informations à <b>{compte.nom ?? compte.identifiant}</b>. Le mot de passe provisoire est valable {jours} jours, ne sert qu’à la première connexion et <b>ne sera plus affiché</b> :
-        la personne devra en choisir un autre. Vous ne pourrez jamais voir son mot de passe ; si elle l’oublie, vous en générerez un nouveau.
+        Il est valable {jours} jours et ne sert qu’à la première connexion : la personne choisira alors son propre mot de passe, que vous ne verrez jamais.
+        <b> Il ne sera plus affiché.</b> Si elle l’oublie, vous en générerez un nouveau.
       </p>
-      <button type="button" className="bouton alt" onClick={async () => notifier((await copier(`Identifiant : ${compte.identifiant}\nMot de passe provisoire : ${compte.motDePasseProvisoire}`)) ? 'Copié' : 'Copie impossible : recopiez-le à la main')}>Copier l’identifiant et le mot de passe</button>
+      <button type="button" className="bouton alt" onClick={async () => notifier((await copier(acces)) ? 'Copié' : 'Copie impossible : recopiez-le à la main')}>Copier le lien, l’identifiant et le mot de passe</button>
       {telephone && <a className="bouton alt" href={`https://wa.me/${telephone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`} target="_blank" rel="noopener noreferrer">Envoyer par WhatsApp</a>}
       {children}
     </div>
-  );
-}
-
-/** Saisie du code de verrouillage de l'appareil : 4 à 6 chiffres seulement. Si une lettre est tapée, on dit pourquoi elle disparaît au lieu de l'effacer en silence. */
-export function SaisieCodeChiffres({ valeur, onChange, nouveau = false, id, desactive = false, reference }: {
-  valeur: string; onChange: (v: string) => void; nouveau?: boolean; id?: string; desactive?: boolean; reference?: React.Ref<HTMLInputElement>;
-}) {
-  const [refuse, setRefuse] = useState(false);
-  return (
-    <>
-      <input
-        {...(id ? { id } : {})}
-        {...(reference ? { ref: reference } : {})}
-        type="password"
-        inputMode="numeric"
-        autoComplete={nouveau ? 'new-password' : 'current-password'}
-        maxLength={6}
-        value={valeur}
-        disabled={desactive}
-        onChange={(e) => {
-          const brut = e.target.value;
-          setRefuse(/\D/.test(brut));
-          onChange(brut.replace(/\D/g, ''));
-        }}
-      />
-      {refuse && <small className="erreur" role="status">Ici, seulement des chiffres. Votre mot de passe et vos codes de secours (lettres et chiffres) se saisissent sur la page de connexion.</small>}
-    </>
   );
 }

@@ -305,29 +305,16 @@ try {
   await cadre.getByText('Exemple chargé').waitFor();
   await neuf.close();
 
-  // 12. Sans compte : un code facultatif verrouille l'application ; pas de déconnexion à proposer
+  // 12. Sans compte : l'application reste ouverte ; ni verrouillage, ni déconnexion, ni code à retenir
   etape(12);
   await page.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
   await page.getByRole('heading', { name: 'Session et sécurité' }).waitFor();
+  await page.getByText('Sans compte, l’application reste ouverte sur cet appareil.', { exact: false }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Se déconnecter' }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Verrouiller l’application' }).count(), 0);
-  await page.getByRole('button', { name: 'Définir un code de verrouillage' }).click();
-  await page.getByLabel('Nouveau code (4 à 6 chiffres)').fill('4827');
-  await page.getByLabel('Confirmez le nouveau code').fill('4827');
-  await page.getByRole('button', { name: 'Enregistrer le code' }).click();
-  await page.getByText('Code enregistré').waitFor();
-  await page.getByRole('button', { name: 'Verrouiller l’application' }).click();
-  await page.getByRole('heading', { name: 'Session verrouillée' }).waitFor();
-  assert.doesNotMatch(await texte(), /Tableau de bord|Quarantaine|Saisie/);
-  await page.getByLabel('Votre code').fill('1111');
-  await page.getByRole('button', { name: 'Déverrouiller' }).click();
-  await page.getByText(/Code incorrect/).waitFor();
-  await page.getByLabel('Votre code').fill('4827');
-  await page.getByRole('button', { name: 'Déverrouiller' }).click();
-  await page.getByRole('heading', { name: 'Session et sécurité' }).waitFor();
-  // Après un rechargement, l'application est verrouillée si le délai est passé ; ici le délai n'est pas passé : elle reste ouverte.
   await page.reload();
   await page.getByRole('heading', { name: 'Session et sécurité' }).waitFor();
+  assert.equal(await page.getByRole('heading', { name: 'Session verrouillée' }).count(), 0);
 
   assert.deepEqual(erreurs, []);
   console.log('E2E OK : démarrage, hors ligne, saisie, alerte, annulation, persistance, incubation, santé, fiche partagée, finances, quarantaine, tableau de bord');

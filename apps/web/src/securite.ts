@@ -1,8 +1,11 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ESSAIS_MAX, attenteApresEchecs, problemeDeCode } from '@digitalab/core';
+import { ESSAIS_MAX, attenteApresEchecs } from '@digitalab/core';
 import { db, type BaseElevage } from './db';
 
-/** Code de verrouillage de l'appareil : on ne garde jamais le code, seulement une empreinte salée. */
+/**
+ * Empreinte locale du mot de passe, pour pouvoir le redemander après un moment d'inactivité même sans réseau.
+ * On ne garde jamais le mot de passe, seulement une empreinte salée.
+ */
 export interface Verrou {
   sel: string;
   empreinte: string;
@@ -84,26 +87,22 @@ export function creerSecurite(base: BaseElevage = db, maintenant: () => number =
   const ecrire = (v: Verrou) => base.appareil.put({ cle: 'verrou', valeur: v });
 
   return {
-    async aUnCode(): Promise<boolean> {
+    async aUnSecret(): Promise<boolean> {
       return !!(await lire());
     },
 
-    /** Crée ou remplace le code. Pour en changer un existant, l'ancien code est exigé. */
-    async definirCode(code: string, ancien?: string): Promise<void> {
-      const probleme = problemeDeCode(code);
-      if (probleme) throw new ErreurCode(probleme);
-      if (await lire()) {
-        if (ancien === undefined || !(await this.verifier(ancien)).ok) throw new ErreurCode('L’ancien code n’est pas le bon.');
-      }
+    /** Retient l'empreinte du mot de passe qui vient d'être accepté par le serveur (connexion, changement de mot de passe). */
+    async definirSecret(motDePasse: string): Promise<void> {
+      if (!motDePasse) throw new ErreurCode('Mot de passe vide.');
       const algo = algoDisponible();
       const sel = selAleatoire();
-      await ecrire({ sel, algo, empreinte: await calculer(code, sel, algo), echecs: 0 });
+      await ecrire({ sel, algo, empreinte: await calculer(motDePasse, sel, algo), echecs: 0 });
     },
 
-    /** Vérifie le code ; après trop d'échecs, l'attente s'allonge puis une vraie reconnexion est exigée. */
+    /** Vérifie le mot de passe sur l'appareil ; après trop d'échecs, l'attente s'allonge puis une vraie reconnexion est exigée. */
     async verifier(code: string): Promise<ResultatCode> {
       const v = await lire();
-      if (!v) return { ok: true };
+      if (!v) return { ok: false };
       const t = maintenant();
       if (v.bloqueJusqua && v.bloqueJusqua > t) return { ok: false, attenteSecondes: Math.ceil((v.bloqueJusqua - t) / 1000) };
       if ((await calculer(code, v.sel, v.algo)) === v.empreinte) {
@@ -117,13 +116,8 @@ export function creerSecurite(base: BaseElevage = db, maintenant: () => number =
       return { ok: false, restants: ESSAIS_MAX - echecs, ...(attente > 0 ? { attenteSecondes: attente } : {}) };
     },
 
-    async retirerCode(code: string): Promise<void> {
-      if (!(await this.verifier(code)).ok) throw new ErreurCode('Ce n’est pas le bon code.');
-      await base.appareil.delete('verrou');
-    },
-
-    /** Oublie le code sans le demander (reconnexion complète faite, ou appareil effacé). */
-    async oublierCode(): Promise<void> {
+    /** Oublie l'empreinte (reconnexion complète demandée, ou appareil effacé). */
+    async oublierSecret(): Promise<void> {
       await base.appareil.delete('verrou');
     },
   };
@@ -131,10 +125,10 @@ export function creerSecurite(base: BaseElevage = db, maintenant: () => number =
 
 export const securite = creerSecurite();
 
-/** État de l'appareil : code défini, compte requis, message de déconnexion automatique. `undefined` tant que ça charge. */
-export function useAppareil(): { aCode: boolean; compteRequis: boolean; deconnecteAuto: boolean } | undefined {
+/** État de l'appareil : relié à un compte (la page de connexion est alors exigée après une déconnexion). `undefined` tant que ça charge. */
+export function useAppareil(): { compteRequis: boolean } | undefined {
   return useLiveQuery(async () => {
     const lignes = new Map((await db.appareil.toArray()).map((l) => [l.cle, l.valeur]));
-    return { aCode: lignes.has('verrou'), compteRequis: lignes.get('compteRequis') === true, deconnecteAuto: lignes.get('deconnecteAuto') === true };
+    return { compteRequis: lignes.get('compteRequis') === true };
   }, []);
 }

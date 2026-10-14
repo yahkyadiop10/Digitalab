@@ -244,11 +244,12 @@ describe('appareil relié à un compte', () => {
     const serveur = fauxServeur();
     const a = await appareil(serveur);
     await a.repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: 10 });
-    await a.synchro.deconnecter({ auto: true });
-    expect((await a.base.appareil.get('deconnecteAuto'))?.valeur).toBe(true);
-    expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ nonEnvoyes: 1 });
+    await a.base.appareil.put({ cle: 'verrou', valeur: { sel: 'x', empreinte: 'y', algo: 'pbkdf2', echecs: 0 } });
+    await a.synchro.deconnecter();
+    // L'empreinte du mot de passe est oubliée : il faudra le saisir à nouveau à la connexion.
+    expect(await a.base.appareil.get('verrou')).toBeUndefined();
+    expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ nonEnvoyes: 1, url: 'http://serveur.test' });
     await a.synchro.lier('http://serveur.test', 'jeton2', 'ndiaye.moussa', org('org-1'));
-    expect((await a.base.appareil.get('deconnecteAuto'))).toBeUndefined();
     expect(await a.base.logements.count()).toBe(1);
     await a.synchro.synchroniser();
     expect(serveur.lignes.size).toBe(1);
@@ -311,9 +312,9 @@ describe('comptes : identifiant et mot de passe', () => {
 
   it('se connecte avec l’identifiant (sans espaces autour) et le mot de passe, sans rien envoyer d’autre', async () => {
     const { f, vus } = appelsFictifs({ 'POST /v1/auth/connexion': { jeton: 'j1', utilisateur: { identifiant: 'ndiaye.moussa', nom: 'Moussa Ndiaye' }, doitChanger: true, organisations: [org] } });
-    const s = await synchroAvec(f).seConnecter('http://serveur.test', '  ndiaye.moussa ', 'k7mq-x9pt-4tnw');
+    const s = await synchroAvec(f).seConnecter('http://serveur.test', '  ndiaye.moussa ', '482913');
     expect(s).toMatchObject({ jeton: 'j1', identifiant: 'ndiaye.moussa', doitChanger: true });
-    expect(vus[0]!.corps).toMatchObject({ identifiant: 'ndiaye.moussa', motDePasse: 'k7mq-x9pt-4tnw' });
+    expect(vus[0]!.corps).toMatchObject({ identifiant: 'ndiaye.moussa', motDePasse: '482913' });
     expect(Object.keys(vus[0]!.corps).sort()).toEqual(['appareil', 'identifiant', 'motDePasse']);
   });
 
@@ -324,33 +325,40 @@ describe('comptes : identifiant et mot de passe', () => {
 
   it('choisit son mot de passe avec la session reçue, pas avec celle de l’appareil', async () => {
     const { f, vus } = appelsFictifs({});
-    await synchroAvec(f).choisirMotDePasse('http://serveur.test', 'jeton-provisoire', 'k7mq-x9pt-4tnw', 'Mon-Nouveau-Mot-2');
-    expect(vus[0]).toMatchObject({ chemin: '/v1/moi/mot-de-passe', methode: 'POST', autorisation: 'Bearer jeton-provisoire', corps: { ancien: 'k7mq-x9pt-4tnw', nouveau: 'Mon-Nouveau-Mot-2' } });
+    await synchroAvec(f).choisirMotDePasse('http://serveur.test', 'jeton-provisoire', '482913', 'Mon-Nouveau-Mot-2');
+    expect(vus[0]).toMatchObject({ chemin: '/v1/moi/mot-de-passe', methode: 'POST', autorisation: 'Bearer jeton-provisoire', corps: { ancien: '482913', nouveau: 'Mon-Nouveau-Mot-2' } });
   });
 
-  it('crée l’administrateur au premier lancement et rend les codes de secours', async () => {
-    const { f, vus } = appelsFictifs({
-      'GET /v1/installation': { aInitialiser: true, cleRequise: true },
-      'POST /v1/installation': { jeton: 'j0', utilisateur: { identifiant: 'admin', nom: 'Aminata' }, doitChanger: false, organisations: [{ ...org, role: 'proprietaire' }], codesSecours: ['aaaa-bbbb-cccc'] },
-    });
-    const s = synchroAvec(f);
-    expect(await s.etatInstallation('http://serveur.test')).toEqual({ aInitialiser: true, cleRequise: true });
-    const r = await s.installer('http://serveur.test', { cle: 'k7mq-x9pt', identifiant: 'admin', motDePasse: 'Poule-Pondeuse-7', nom: 'Aminata', nomElevage: 'Ferme Sow' });
-    expect(r).toMatchObject({ jeton: 'j0', identifiant: 'admin', codesSecours: ['aaaa-bbbb-cccc'] });
-    expect(vus[1]!.corps).toMatchObject({ cle: 'k7mq-x9pt', identifiant: 'admin', nomElevage: 'Ferme Sow' });
+  it('un mot de passe changé ailleurs, vérifié par le serveur, donne une session neuve à l’appareil', async () => {
+    const { f, vus } = appelsFictifs({ 'POST /v1/auth/connexion': { jeton: 'jeton-neuf', utilisateur: { identifiant: 'sow.awa', nom: null }, doitChanger: false, organisations: [org] } });
+    const base = new BaseElevage(`comptes-${++n}`);
+    const s = creerSynchro(base, f);
+    await s.lier('http://serveur.test', 'jeton-ancien', 'sow.awa', { id: 'org-1', nom: 'Ferme test', role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
+    expect(await s.renouvelerSession('canard9')).toBe('ok');
+    expect(vus.at(-1)!.corps).toMatchObject({ identifiant: 'sow.awa', motDePasse: 'canard9' });
+    expect((await base.connexion.get('serveur'))?.jeton).toBe('jeton-neuf');
+  });
+
+  it('signale un mot de passe provisoire redonné par l’administrateur sans changer la session', async () => {
+    const { f } = appelsFictifs({ 'POST /v1/auth/connexion': { jeton: 'jeton-limite', utilisateur: { identifiant: 'sow.awa', nom: null }, doitChanger: true, organisations: [org] } });
+    const base = new BaseElevage(`comptes-${++n}`);
+    const s = creerSynchro(base, f);
+    await s.lier('http://serveur.test', 'jeton-ancien', 'sow.awa', { id: 'org-1', nom: 'Ferme test', role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
+    expect(await s.renouvelerSession('482913')).toBe('provisoire');
+    expect((await base.connexion.get('serveur'))?.jeton).toBe('jeton-ancien');
   });
 
   it('une fois relié, l’administrateur ajoute une personne et obtient son mot de passe provisoire', async () => {
     const { f, vus } = appelsFictifs({
-      'POST /v1/organisations/org-1/membres': { ok: true, identifiant: 'sow.awa', nom: 'Awa Sow', motDePasseProvisoire: 'k7mq-x9pt-4tnw', expireLe: '2026-10-13T10:00:00.000Z' },
-      'POST /v1/organisations/org-1/membres/sow.awa/mot-de-passe': { ok: true, identifiant: 'sow.awa', nom: 'Awa Sow', motDePasseProvisoire: 'ccdd-eeff-ghjk', expireLe: '2026-10-13T10:00:00.000Z' },
+      'POST /v1/organisations/org-1/membres': { ok: true, identifiant: 'sow.awa', nom: 'Awa Sow', motDePasseProvisoire: '482913', expireLe: '2026-10-13T10:00:00.000Z' },
+      'POST /v1/organisations/org-1/membres/sow.awa/mot-de-passe': { ok: true, identifiant: 'sow.awa', nom: 'Awa Sow', motDePasseProvisoire: '730561', expireLe: '2026-10-13T10:00:00.000Z' },
     });
     const s = synchroAvec(f);
     await s.lier('http://serveur.test', 'jeton', 'admin', { id: 'org-1', nom: 'Ferme test', role: 'proprietaire', droits: droitsEffectifs('proprietaire', null), zones: [] });
     const cree = await s.ajouterMembre({ prenom: 'Awa', nom: 'Sow', role: 'soigneur' });
-    expect(cree).toMatchObject({ identifiant: 'sow.awa', motDePasseProvisoire: 'k7mq-x9pt-4tnw' });
+    expect(cree).toMatchObject({ identifiant: 'sow.awa', motDePasseProvisoire: '482913' });
     expect(vus.at(-1)).toMatchObject({ autorisation: 'Bearer jeton', corps: { prenom: 'Awa', nom: 'Sow', role: 'soigneur' } });
-    expect((await s.reinitialiserMotDePasse('sow.awa')).motDePasseProvisoire).toBe('ccdd-eeff-ghjk');
+    expect((await s.reinitialiserMotDePasse('sow.awa')).motDePasseProvisoire).toBe('730561');
     await s.modifierMembre('sow.awa', { fonction: 'Aide' });
     expect(vus.at(-1)).toMatchObject({ chemin: '/v1/organisations/org-1/membres/sow.awa', methode: 'PATCH', corps: { fonction: 'Aide' } });
   });

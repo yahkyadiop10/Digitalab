@@ -406,7 +406,7 @@ export function creerRepo(base: BaseElevage = db) {
     },
 
     /** Informations imprimées sur les factures et logo : une seule fiche, partagée entre les appareils. */
-    async enregistrerProfil(d: { adresse?: string; telephone?: string; ninea?: string; logo?: string | null; nom?: string; securite?: { verrouillageMin: number; deconnexionMin: number } }): Promise<void> {
+    async enregistrerProfil(d: { adresse?: string; telephone?: string; ninea?: string; logo?: string | null; nom?: string; securite?: { verrouillageMin: number } }): Promise<void> {
       if (d.logo && d.logo.length > 40_000) throw new ErreurSaisie('Ce logo est trop lourd. Choisissez une image plus petite.');
       const actuel = await base.profil.get('elevage');
       const suite: Record<string, unknown> = {};

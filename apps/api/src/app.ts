@@ -1,5 +1,6 @@
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import {
   BLOCAGE_CONNEXION_MINUTES, ESSAIS_CONNEXION_MAX, LIBELLES_PROFILS, MOT_DE_PASSE_PROVISOIRE_JOURS, PROFILS_ASSIGNABLES, TABLES_SYNCHRONISEES,
   aDroit, decrireEnregistrement, determinerAction, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, identifiantDepuisNom, identifiantLibre, nettoyerDroits,
@@ -9,10 +10,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Config } from './config.js';
 import { transaction, type Pool } from './db.js';
-import { sansAdministrateur } from './installation.js';
-import {
-  egaux, empreinteCodeSecours, empreinteJeton, genererCodeSecours, genererJeton, genererMotDePasseProvisoire, hacherMotDePasse, normaliserCle, normaliserCodeSecours, verifierMotDePasse,
-} from './securite.js';
+import { empreinteJeton, genererJeton, genererMotDePasseProvisoire, hacherMotDePasse, verifierMotDePasse } from './securite.js';
 
 export interface Dependances {
   pool: Pool;
@@ -46,7 +44,6 @@ class ErreurHttp extends Error {
 
 const LIMITE_REPONSE_SYNC = 1000;
 const TAILLE_MAX_ENREGISTREMENT = 50_000;
-const NOMBRE_CODES_SECOURS = 8;
 const MESSAGE_IDENTIFIANTS = 'Identifiant ou mot de passe incorrect.';
 const JOUR_MS = 86_400_000;
 
@@ -67,6 +64,20 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     return reply.status(500).send({ erreur: 'Erreur du serveur. Réessayez plus tard.' });
   });
   app.setNotFoundHandler((_req, reply) => reply.status(404).send({ erreur: 'Adresse inconnue.' }));
+
+  // L'application elle-même, à l'adresse du serveur : le lien donné au client ouvre directement la page de connexion.
+  if (config.dossierWeb) {
+    await app.register(fastifyStatic, {
+      root: config.dossierWeb,
+      prefix: '/',
+      wildcard: false,
+      cacheControl: false,
+      setHeaders: (res, chemin) => {
+        // La page et le service hors ligne doivent être relus à chaque fois pour recevoir les mises à jour ; les autres fichiers ont un nom qui change avec leur contenu.
+        if (/(index\.html|sw\.js|manifest\.webmanifest)$/.test(chemin)) res.setHeader('cache-control', 'no-cache');
+      },
+    });
+  }
 
   /* ---------- Authentification ---------- */
 
@@ -209,69 +220,6 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
 
   const versUtilisateurPublic = (u: Pick<Utilisateur, 'id' | 'identifiant' | 'nom' | 'telephone'>) => ({ id: u.id, identifiant: u.identifiant, nom: u.nom, telephone: u.telephone });
 
-  /** Génère les codes de secours (remplace les précédents) et renvoie leur texte, qui ne sera plus jamais affichable. */
-  async function creerCodesSecours(executeur: Executeur, utilisateurId: string): Promise<string[]> {
-    await executeur.query('DELETE FROM codes_secours WHERE utilisateur_id = $1', [utilisateurId]);
-    const codes = Array.from({ length: NOMBRE_CODES_SECOURS }, () => genererCodeSecours());
-    for (const code of codes) {
-      await executeur.query('INSERT INTO codes_secours (utilisateur_id, code_hash) VALUES ($1, $2)', [utilisateurId, empreinteCodeSecours(config.secret, code)]);
-    }
-    return codes;
-  }
-
-  /* ----- Premier lancement : création de l'administrateur ----- */
-
-  app.get('/v1/installation', async () => ({ aInitialiser: await sansAdministrateur(pool), cleRequise: !!config.cleInstallation }));
-
-  app.post('/v1/installation', {
-    ...limiteAuth,
-    schema: {
-      body: {
-        type: 'object', required: ['identifiant', 'motDePasse'], additionalProperties: false,
-        properties: {
-          cle: { type: 'string', maxLength: 60 }, identifiant: { type: 'string', maxLength: 60 }, motDePasse: { type: 'string', maxLength: 200 },
-          nom: { type: 'string', maxLength: 80 }, nomElevage: { type: 'string', maxLength: 80 }, appareil: { type: 'string', maxLength: 80 },
-        },
-      },
-    },
-  }, async (req) => {
-    const b = req.body as { cle?: string; identifiant: string; motDePasse: string; nom?: string; nomElevage?: string; appareil?: string };
-    if (!(await sansAdministrateur(pool))) throw new ErreurHttp(409, 'L’application est déjà installée. Connectez-vous avec votre identifiant.');
-    if (config.cleInstallation) {
-      await verifierBlocage('__installation');
-      if (!egaux(normaliserCle(b.cle ?? ''), normaliserCle(config.cleInstallation))) {
-        await noterEchec('__installation');
-        throw new ErreurHttp(403, 'Clé d’installation incorrecte. Elle s’affiche dans la fenêtre du serveur.');
-      }
-    }
-    const identifiant = normaliserIdentifiant(b.identifiant);
-    const problemeId = problemeIdentifiant(identifiant);
-    if (problemeId) throw new ErreurHttp(400, problemeId);
-    const problemeMdp = problemeMotDePasse(b.motDePasse, identifiant);
-    if (problemeMdp) throw new ErreurHttp(400, problemeMdp);
-    const empreinte = await hacherMotDePasse(b.motDePasse, config.coutMotDePasse);
-    const nom = b.nom?.trim() || null;
-
-    const r = await transaction(pool, async (c) => {
-      await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('installation', 0))`);
-      if (!(await sansAdministrateur(c))) throw new ErreurHttp(409, 'L’application est déjà installée. Connectez-vous avec votre identifiant.');
-      const pris = await c.query('SELECT 1 FROM utilisateurs WHERE identifiant = $1', [identifiant]);
-      if (pris.rowCount) throw new ErreurHttp(409, 'Cet identifiant existe déjà. Choisissez-en un autre.');
-      const u = (await c.query<{ id: string }>(
-        `INSERT INTO utilisateurs (identifiant, nom, mot_de_passe_hash, derniere_connexion) VALUES ($1, $2, $3, $4) RETURNING id`,
-        [identifiant, nom, empreinte, maintenant()],
-      )).rows[0]!;
-      const o = (await c.query<{ id: string }>('INSERT INTO organisations (nom) VALUES ($1) RETURNING id', [b.nomElevage?.trim() || 'Mon élevage'])).rows[0]!;
-      await c.query(`INSERT INTO membres (organisation_id, utilisateur_id, role) VALUES ($1, $2, 'proprietaire')`, [o.id, u.id]);
-      const codesSecours = await creerCodesSecours(c, u.id);
-      const jeton = await ouvrirSession(c, u.id, b.appareil);
-      await journaliser(c, o.id, { id: u.id, identifiant, nom, fonction: null }, 'utilisateur', 'utilisateurs', identifiant, 'a créé le compte administrateur de l’élevage', maintenant().getTime());
-      return { jeton, utilisateur: { id: u.id, identifiant, nom, telephone: null }, codesSecours };
-    });
-    await oublierEchecs('__installation');
-    return { ...r, doitChanger: false, organisations: await organisationsDe(r.utilisateur.id) };
-  });
-
   /* ----- Connexion ----- */
 
   app.post('/v1/auth/connexion', {
@@ -307,42 +255,6 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     };
   });
 
-  /** Mot de passe perdu par le propriétaire : un code de secours, noté sur papier à l'installation, permet d'en choisir un nouveau. */
-  app.post('/v1/auth/secours', {
-    ...limiteAuth,
-    schema: {
-      body: {
-        type: 'object', required: ['identifiant', 'code', 'nouveauMotDePasse'], additionalProperties: false,
-        properties: { identifiant: { type: 'string', maxLength: 60 }, code: { type: 'string', maxLength: 40 }, nouveauMotDePasse: { type: 'string', maxLength: 200 } },
-      },
-    },
-  }, async (req) => {
-    const b = req.body as { identifiant: string; code: string; nouveauMotDePasse: string };
-    const identifiant = normaliserIdentifiant(b.identifiant);
-    await verifierBlocage(identifiant);
-    const probleme = problemeMotDePasse(b.nouveauMotDePasse, identifiant);
-    if (probleme) throw new ErreurHttp(400, probleme);
-    const u = (await pool.query<{ id: string; nom: string | null; telephone: string | null }>('SELECT id, nom, telephone FROM utilisateurs WHERE identifiant = $1', [identifiant])).rows[0];
-    const code = u ? (await pool.query<{ id: string }>(
-      'SELECT id FROM codes_secours WHERE utilisateur_id = $1 AND utilise_le IS NULL AND code_hash = $2', [u.id, empreinteCodeSecours(config.secret, b.code)],
-    )).rows[0] : undefined;
-    if (!u || !code || normaliserCodeSecours(b.code).length < 8) {
-      await noterEchec(identifiant);
-      throw new ErreurHttp(401, 'Identifiant ou code de secours incorrect.');
-    }
-    const empreinte = await hacherMotDePasse(b.nouveauMotDePasse, config.coutMotDePasse);
-    const restants = await transaction(pool, async (c) => {
-      const pris = await c.query('UPDATE codes_secours SET utilise_le = $2 WHERE id = $1 AND utilise_le IS NULL', [code.id, maintenant()]);
-      if (!pris.rowCount) throw new ErreurHttp(401, 'Identifiant ou code de secours incorrect.');
-      await c.query('UPDATE utilisateurs SET mot_de_passe_hash = $2, doit_changer = false, mot_de_passe_expire = NULL WHERE id = $1', [u.id, empreinte]);
-      await c.query('DELETE FROM sessions WHERE utilisateur_id = $1', [u.id]);
-      await journaliserCompte(c, { id: u.id, identifiant, nom: u.nom, telephone: u.telephone, doitChanger: false }, 'a utilisé un code de secours pour choisir un nouveau mot de passe');
-      return Number((await c.query<{ n: string }>('SELECT count(*) AS n FROM codes_secours WHERE utilisateur_id = $1 AND utilise_le IS NULL', [u.id])).rows[0]!.n);
-    });
-    await oublierEchecs(identifiant);
-    return { ok: true, codesRestants: restants };
-  });
-
   app.post('/v1/auth/deconnexion', async (req) => {
     await authentifier(req, { permissif: true });
     const jeton = (req.headers.authorization ?? '').slice(7).trim();
@@ -352,8 +264,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
 
   app.get('/v1/moi', async (req) => {
     const u = await authentifier(req, { permissif: true });
-    const secours = (await pool.query<{ n: string }>('SELECT count(*) AS n FROM codes_secours WHERE utilisateur_id = $1 AND utilise_le IS NULL', [u.id])).rows[0]!;
-    return { utilisateur: { ...versUtilisateurPublic(u), doitChanger: u.doitChanger }, organisations: await organisationsDe(u.id), codesSecoursRestants: Number(secours.n) };
+    return { utilisateur: { ...versUtilisateurPublic(u), doitChanger: u.doitChanger }, organisations: await organisationsDe(u.id) };
   });
 
   app.patch('/v1/moi', {
@@ -395,29 +306,6 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     });
     await oublierEchecs(u.identifiant);
     return { ok: true };
-  });
-
-  /** Nouveaux codes de secours du propriétaire (les anciens cessent de fonctionner). Demande le mot de passe. */
-  app.post('/v1/moi/codes-secours', {
-    ...limiteAuth,
-    schema: { body: { type: 'object', required: ['motDePasse'], additionalProperties: false, properties: { motDePasse: { type: 'string', maxLength: 200 } } } },
-  }, async (req) => {
-    const u = await authentifier(req);
-    await verifierBlocage(u.identifiant);
-    const proprietaire = await pool.query(`SELECT 1 FROM membres WHERE utilisateur_id = $1 AND role = 'proprietaire'`, [u.id]);
-    if (!proprietaire.rowCount) throw new ErreurHttp(403, 'Seul le propriétaire a des codes de secours.');
-    const ligne = (await pool.query<{ mot_de_passe_hash: string }>('SELECT mot_de_passe_hash FROM utilisateurs WHERE id = $1', [u.id])).rows[0];
-    if (!ligne || !(await verifierMotDePasse((req.body as { motDePasse: string }).motDePasse, ligne.mot_de_passe_hash))) {
-      await noterEchec(u.identifiant);
-      throw new ErreurHttp(400, 'Mot de passe incorrect.');
-    }
-    const codesSecours = await transaction(pool, async (c) => {
-      const codes = await creerCodesSecours(c, u.id);
-      await journaliserCompte(c, u, 'a généré de nouveaux codes de secours');
-      return codes;
-    });
-    await oublierEchecs(u.identifiant);
-    return { codesSecours };
   });
 
   /* ---------- Organisations et membres ---------- */
@@ -511,17 +399,23 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       ...paramsOrg,
       body: {
         type: 'object', required: ['prenom', 'nom'], additionalProperties: false,
-        properties: { prenom: { type: 'string', minLength: 1, maxLength: 60 }, nom: { type: 'string', minLength: 1, maxLength: 60 }, ...schemaDroits },
+        properties: { prenom: { type: 'string', minLength: 1, maxLength: 60 }, nom: { type: 'string', minLength: 1, maxLength: 60 }, identifiant: { type: 'string', maxLength: 60 }, ...schemaDroits },
       },
     },
   }, async (req) => {
     const u = await authentifier(req);
     const { id } = req.params as { id: string };
     await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de gérer les utilisateurs.');
-    const b = req.body as { prenom: string; nom: string; telephone?: string; fonction?: string; role?: RoleMembre; droits?: string[]; zones?: string[] };
+    const b = req.body as { prenom: string; nom: string; identifiant?: string; telephone?: string; fonction?: string; role?: RoleMembre; droits?: string[]; zones?: string[] };
     const prenom = b.prenom.trim();
     const nom = b.nom.trim();
-    const base = identifiantDepuisNom(prenom, nom);
+    // L'administrateur peut choisir un identifiant plus court (« moussa ») ; sinon on propose nom.prénom.
+    const choisi = b.identifiant?.trim() ? normaliserIdentifiant(b.identifiant) : null;
+    if (choisi) {
+      const probleme = problemeIdentifiant(choisi);
+      if (probleme) throw new ErreurHttp(400, probleme);
+    }
+    const base = choisi ?? identifiantDepuisNom(prenom, nom);
     if (problemeIdentifiant(base)) throw new ErreurHttp(400, 'Le nom et le prénom doivent contenir des lettres.');
     const telephone = telephoneFacultatif(b.telephone);
     const { role, droits, zones } = await resoudreDroits(id, u, b);
@@ -534,6 +428,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     const identifiant = await transaction(pool, async (c) => {
       await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('identifiants', 0))`);
       const proches = new Set((await c.query<{ identifiant: string }>(`SELECT identifiant FROM utilisateurs WHERE identifiant LIKE $1 || '%'`, [base])).rows.map((x) => x.identifiant));
+      if (choisi && proches.has(choisi)) throw new ErreurHttp(409, `L’identifiant « ${choisi} » est déjà pris. Choisissez-en un autre.`);
       const libre = identifiantLibre(base, (x) => proches.has(x));
       const nouveau = (await c.query<{ id: string }>(
         `INSERT INTO utilisateurs (identifiant, nom, telephone, mot_de_passe_hash, doit_changer, mot_de_passe_expire) VALUES ($1, $2, $3, $4, true, $5) RETURNING id`,
@@ -600,7 +495,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     const moi = await exigerDroit(id, u.id, 'admin.utilisateurs', 'Vous n’avez pas le droit de réinitialiser des mots de passe.');
     const cible = await cibleDe(id, identifiant);
     if (cible.utilisateur_id === u.id) throw new ErreurHttp(400, 'Pour changer votre propre mot de passe, utilisez « Compte ».');
-    if (cible.role === 'proprietaire') throw new ErreurHttp(403, 'Le mot de passe du propriétaire ne se réinitialise pas ici : il utilise ses codes de secours.');
+    if (cible.role === 'proprietaire') throw new ErreurHttp(403, 'Le mot de passe du propriétaire ne se réinitialise pas ici : la personne qui a installé l’application peut lui en redonner un depuis l’ordinateur du serveur.');
     if (moi.role !== 'proprietaire' && aDroit(droitsEffectifs(cible.role, cible.droits), 'admin.utilisateurs')) {
       throw new ErreurHttp(403, 'Seul le propriétaire peut réinitialiser le mot de passe d’une personne qui gère les utilisateurs.');
     }

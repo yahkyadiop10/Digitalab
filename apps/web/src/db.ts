@@ -36,7 +36,7 @@ export interface Connexion {
   erreur?: string;
 }
 
-/** Réglages propres à l'appareil et à la sécurité (code de verrouillage, compte requis…). Jamais sauvegardés ni synchronisés. */
+/** Réglages propres à l'appareil et à la sécurité (empreinte du mot de passe, compte requis…). Jamais sauvegardés ni synchronisés. */
 export interface LigneAppareil {
   cle: string;
   valeur: unknown;
