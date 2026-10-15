@@ -23,6 +23,7 @@ export interface Verrou {
 export interface ProprietaireAppareil {
   organisationId: string;
   identifiant: string;
+  nom?: string;
   /** Adresse du serveur : proposée de nouveau à la reconnexion. */
   url?: string;
   /** Saisies faites sur cet appareil et jamais envoyées au serveur au moment de la déconnexion. */

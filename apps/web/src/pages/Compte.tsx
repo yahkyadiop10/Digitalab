@@ -63,9 +63,9 @@ type Etape = 'connexion' | 'changement' | 'choix';
  * Connexion par identifiant et mot de passe, donnés par l'administrateur. Ouverte par le lien de connexion, l'application connaît déjà
  * l'adresse du serveur : il n'y a que ces deux cases à remplir. `apres` s'exécute une fois l'appareil relié.
  */
-export function FormConnexion({ apres }: { apres?: () => void } = {}) {
+export function FormConnexion({ apres, surTelephoneAutre }: { apres?: () => void; surTelephoneAutre?: (affiche: boolean) => void } = {}) {
   const notifier = useNotifier();
-  const [autre, setAutre] = useState<{ message: string; nonEnvoyes: number; session: { jeton: string; identifiant: string }; org: OrganisationServeur; motDePasse: string } | null>(null);
+  const [autre, setAutre] = useState<{ erreur: ErreurAppareilAutre; session: { jeton: string; identifiant: string; nom?: string | null }; org: OrganisationServeur; motDePasse: string } | null>(null);
   const [url, setUrl] = useState(URL_SERVEUR_DEFAUT);
   // Tant qu'on ne sait pas si l'application vient du serveur, on n'affiche pas la case de l'adresse.
   const [adresseConnue, setAdresseConnue] = useState<boolean | null>(URL_SERVEUR_DEFAUT ? true : null);
@@ -75,6 +75,9 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
   const [session, setSession] = useState<SessionServeur | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const [occupe, setOccupe] = useState(false);
+
+  // La page autour cache ses propres textes pendant que l'on explique que le téléphone était à quelqu'un d'autre.
+  useEffect(() => surTelephoneAutre?.(autre !== null), [autre !== null]);
 
   useEffect(() => {
     if (URL_SERVEUR_DEFAUT) return;
@@ -103,12 +106,12 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
     }
   };
 
-  const lier = async (s: { jeton: string; identifiant: string }, org: OrganisationServeur, secret: string, effacer = false) => {
+  const lier = async (s: { jeton: string; identifiant: string; nom?: string | null }, org: OrganisationServeur, secret: string, effacer = false) => {
     try {
-      await synchro.lier(url.trim(), s.jeton, s.identifiant, org, { effacer });
+      await synchro.lier(url.trim(), s.jeton, s.identifiant, org, { effacer, nom: s.nom ?? null });
     } catch (e) {
-      // L'appareil contenait les données de quelqu'un d'autre : on demande avant d'effacer.
-      if (e instanceof ErreurAppareilAutre) return setAutre({ message: e.message, nonEnvoyes: e.nonEnvoyes, session: s, org, motDePasse: secret });
+      // Le téléphone contenait les données de quelqu'un d'autre : on explique avant de les retirer.
+      if (e instanceof ErreurAppareilAutre) return setAutre({ erreur: e, session: s, org, motDePasse: secret });
       throw e;
     }
     // L'appareil retient l'empreinte du mot de passe : il pourra le redemander après un moment d'inactivité, même sans réseau.
@@ -145,13 +148,27 @@ export function FormConnexion({ apres }: { apres?: () => void } = {}) {
   };
 
   if (autre) {
+    const { personne, nonEnvoyes, autreElevage } = autre.erreur;
+    const qui = personne.nom ? `${personne.nom} (${personne.identifiant})` : personne.identifiant;
+    const prenom = (personne.nom ?? personne.identifiant).split(/\s+/)[0];
     return (
-      <div className="carte">
-        <h3>{autre.message}</h3>
-        <p>Pour continuer, ces données doivent être effacées de cet appareil. Ce qui a été envoyé au serveur y reste.</p>
-        {autre.nonEnvoyes > 0 && <p className="erreur">Attention : {autre.nonEnvoyes} saisie{autre.nonEnvoyes > 1 ? 's' : ''} faite{autre.nonEnvoyes > 1 ? 's' : ''} sur cet appareil n’a{autre.nonEnvoyes > 1 ? 'ont' : ''} jamais été envoyée{autre.nonEnvoyes > 1 ? 's' : ''} et sera perdue. Reconnectez d’abord la personne concernée pour les envoyer.</p>}
-        <button className="bouton" disabled={occupe} onClick={() => void executer(() => lier(autre.session, autre.org, autre.motDePasse, true))}>Effacer cet appareil et continuer</button>
+      <div className="carte appareil-autre">
+        <h3>{autreElevage ? 'Ce téléphone était utilisé pour un autre élevage' : `Ce téléphone était utilisé par ${qui}`}</h3>
+        <p>
+          Pour protéger {autreElevage ? 'les informations de cet élevage' : 'ses informations'}, elles vont être retirées de ce téléphone.
+          Elles restent en sécurité sur le serveur{autreElevage ? '' : ` : ${prenom} les retrouvera en se reconnectant sur son téléphone`}.
+        </p>
+        <p>Ensuite, vous verrez ici ce que votre propre compte vous permet de voir.</p>
+        {MODE_APERCU && <p className="muet">Démonstration : le serveur est simulé et ne garde pas les données de l’élevage. Après avoir continué, l’élevage sera vide ; sur un vrai serveur, vous retrouveriez les animaux et les saisies de la ferme.</p>}
+        {nonEnvoyes > 0 && (
+          <p className="erreur">
+            Attention : {nonEnvoyes} saisie{nonEnvoyes > 1 ? 's' : ''} faite{nonEnvoyes > 1 ? 's' : ''} sur ce téléphone {nonEnvoyes > 1 ? 'n’ont' : 'n’a'} pas encore été envoyée{nonEnvoyes > 1 ? 's' : ''} au serveur et {nonEnvoyes > 1 ? 'seront perdues' : 'sera perdue'}.
+            Pour {nonEnvoyes > 1 ? 'les' : 'la'} garder, appuyez sur « Annuler » et reconnectez d’abord {autreElevage ? 'la personne qui utilisait ce téléphone' : prenom}.
+          </p>
+        )}
+        <button className="bouton" disabled={occupe} onClick={() => void executer(() => lier(autre.session, autre.org, autre.motDePasse, true))}>Continuer avec mon compte</button>
         <button className="lien" onClick={() => setAutre(null)}>Annuler</button>
+        <p className="muet conseil">💡 Le plus simple : un téléphone par personne. Chacun se connecte sur le sien, et ce message n’apparaît plus.</p>
         {erreur && <p className="erreur" role="alert">{erreur}</p>}
       </div>
     );

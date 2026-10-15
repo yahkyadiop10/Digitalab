@@ -20,6 +20,8 @@ export interface Connexion {
   url: string;
   jeton: string;
   identifiant: string;
+  /** Nom de la personne, pour lui parler par son nom (« Ce téléphone était utilisé par Aminata »). */
+  nom?: string;
   organisationId: string;
   organisationNom: string;
   role: RoleMembre;

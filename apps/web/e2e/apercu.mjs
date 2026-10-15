@@ -131,8 +131,12 @@ try {
   await app.getByLabel('Nouveau mot de passe', { exact: true }).fill('moussa-poules');
   await app.getByLabel('Confirmez le nouveau mot de passe').fill('moussa-poules');
   await app.getByRole('button', { name: 'Enregistrer et continuer' }).click();
-  await app.getByText(/Cet appareil contient les données de/).waitFor();
-  await app.getByRole('button', { name: 'Effacer cet appareil et continuer' }).click();
+  // Le téléphone était celui d'admin : l'écran explique simplement ce qui va se passer.
+  await app.getByRole('heading', { name: /Ce téléphone était utilisé par admin/ }).waitFor();
+  await app.getByText(/Elles restent en sécurité sur le serveur/).waitFor();
+  await app.getByText(/un téléphone par personne/).waitFor();
+  if (process.env.CAPTURES) await page.screenshot({ path: `${process.env.CAPTURES}/autre.png`, fullPage: true });
+  await app.getByRole('button', { name: 'Continuer avec mon compte' }).click();
   // Les données de la personne précédente ont disparu.
   await app.getByRole('heading', { name: 'Tableau de bord' }).waitFor();
   assert.doesNotMatch(await app.locator('body').innerText(), /Brahma|Soie/);

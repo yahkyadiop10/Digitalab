@@ -22,12 +22,13 @@ function Cadre({ children }: { children: React.ReactNode }) {
 /** Page de connexion : affichée quand l'appareil a été relié à un compte puis déconnecté. */
 export function PorteConnexion() {
   const confirmer = useConfirmer();
+  const [telephoneAutre, setTelephoneAutre] = useState(false);
   return (
     <Cadre>
       <h1>Connexion</h1>
-      <p className="muet">Entrez votre identifiant et votre mot de passe. Les saisies que vous aviez faites sur cet appareil sont toujours là et seront envoyées après la connexion.</p>
-      <FormConnexion apres={() => { marquerActivite(); aller('accueil'); }} />
-      <div className="carte">
+      {!telephoneAutre && <p className="muet">Entrez votre identifiant et votre mot de passe. Les saisies que vous aviez faites sur ce téléphone sont toujours là et seront envoyées après la connexion.</p>}
+      <FormConnexion apres={() => { marquerActivite(); aller('accueil'); }} surTelephoneAutre={setTelephoneAutre} />
+      {!telephoneAutre && <div className="carte">
         <button
           className="lien danger"
           onClick={async () => {
@@ -39,7 +40,7 @@ export function PorteConnexion() {
         >
           Effacer les données de cet appareil
         </button>
-      </div>
+      </div>}
     </Cadre>
   );
 }

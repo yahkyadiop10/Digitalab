@@ -10,9 +10,16 @@ export class ErreurServeur extends Error {
   }
 }
 
-/** Cet appareil contient les données d'une autre personne ou d'un autre élevage : il faut les effacer avant de continuer. */
+/** Ce téléphone contient les données d'une autre personne ou d'un autre élevage : elles doivent en être retirées avant de continuer. */
 export class ErreurAppareilAutre extends Error {
-  constructor(message: string, readonly nonEnvoyes: number) {
+  constructor(
+    message: string,
+    readonly nonEnvoyes: number,
+    /** Qui utilisait ce téléphone : son nom s'il est connu, sinon son identifiant. */
+    readonly personne: { nom: string | null; identifiant: string },
+    /** Les données appartiennent à un autre élevage (et pas seulement à une autre personne du même élevage). */
+    readonly autreElevage: boolean,
+  ) {
     super(message);
   }
 }
@@ -298,26 +305,27 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
      * Relie cet appareil à un élevage du serveur ; la première synchronisation envoie ce qui existe déjà ici et récupère le reste.
      * Si l'appareil contient les données d'une autre personne ou d'un autre élevage, il faut `effacer` : ces données sont retirées de l'appareil (elles restent sur le serveur).
      */
-    async lier(url: string, jeton: string, identifiant: string, org: OrganisationServeur, options: { effacer?: boolean } = {}): Promise<void> {
+    async lier(url: string, jeton: string, identifiant: string, org: OrganisationServeur, options: { effacer?: boolean; nom?: string | null } = {}): Promise<void> {
       const proprietaire = (await base.appareil.get('proprietaire'))?.valeur as ProprietaireAppareil | undefined;
       const autre = !!proprietaire && (proprietaire.organisationId !== org.id || proprietaire.identifiant !== identifiant);
       if (autre && !options.effacer) {
+        const autreElevage = proprietaire!.organisationId !== org.id;
         throw new ErreurAppareilAutre(
-          proprietaire!.organisationId !== org.id
-            ? 'Cet appareil contient les données d’un autre élevage.'
-            : `Cet appareil contient les données de ${proprietaire!.identifiant}.`,
+          autreElevage ? 'Ce téléphone était utilisé pour un autre élevage.' : `Ce téléphone était utilisé par ${proprietaire!.nom ?? proprietaire!.identifiant}.`,
           proprietaire!.nonEnvoyes,
+          { nom: proprietaire!.nom ?? null, identifiant: proprietaire!.identifiant },
+          autreElevage,
         );
       }
       if (autre) await effacerDonnees();
       await base.connexion.put({
-        cle: 'serveur', url: url.replace(/\/+$/, ''), jeton, identifiant, organisationId: org.id, organisationNom: org.nom,
+        cle: 'serveur', url: url.replace(/\/+$/, ''), jeton, identifiant, ...(options.nom ? { nom: options.nom } : {}), organisationId: org.id, organisationNom: org.nom,
         role: org.role, droits: org.droits, zones: org.zones, ...(org.fonction ? { fonction: org.fonction } : {}), derniereSeq: 0, dernierEnvoi: 0,
       });
       // Une fois relié, l'appareil ne s'ouvre plus sans compte : se déconnecter ramène à la page de connexion.
       await base.appareil.bulkPut([
         { cle: 'compteRequis', valeur: true },
-        { cle: 'proprietaire', valeur: { organisationId: org.id, identifiant, url: url.replace(/\/+$/, ''), nonEnvoyes: 0 } satisfies ProprietaireAppareil },
+        { cle: 'proprietaire', valeur: { organisationId: org.id, identifiant, ...(options.nom ? { nom: options.nom } : {}), url: url.replace(/\/+$/, ''), nonEnvoyes: 0 } satisfies ProprietaireAppareil },
       ]);
       await base.reglages.put({ cle: 'demarrageFait', valeur: true });
       const local = await base.reglages.get('nomElevage');
@@ -349,7 +357,7 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
         /* sans réseau ou session déjà expirée : on oublie quand même la connexion ici */
       }
       await base.connexion.delete('serveur');
-      await base.appareil.put({ cle: 'proprietaire', valeur: { organisationId: c.organisationId, identifiant: c.identifiant, url: c.url, nonEnvoyes } satisfies ProprietaireAppareil });
+      await base.appareil.put({ cle: 'proprietaire', valeur: { organisationId: c.organisationId, identifiant: c.identifiant, ...(c.nom ? { nom: c.nom } : {}), url: c.url, nonEnvoyes } satisfies ProprietaireAppareil });
       await base.appareil.put({ cle: 'compteRequis', valeur: true });
       await base.appareil.delete('verrou');
     },
@@ -412,6 +420,7 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       const c = await lire();
       if (!c) throw new ErreurReseau('Non connecté.');
       await appeler(c.url, '/v1/moi', { jeton: c.jeton, methode: 'PATCH', corps: d });
+      if (d.nom !== undefined) await base.connexion.update('serveur', { nom: d.nom.trim() || undefined });
     },
 
     /** Changer son mot de passe ; les autres appareils de la personne sont déconnectés. */

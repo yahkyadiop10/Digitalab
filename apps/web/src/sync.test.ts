@@ -260,12 +260,26 @@ describe('appareil relié à un compte', () => {
     const a = await appareil(serveur);
     await a.repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: 10 });
     await a.synchro.deconnecter();
-    await expect(a.synchro.lier('http://serveur.test', 'j', 'autre.personne', org('org-1', 'soigneur'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
+    await expect(a.synchro.lier('http://serveur.test', 'j', 'autre.personne', org('org-1', 'soigneur'))).rejects.toMatchObject({
+      personne: { identifiant: 'ndiaye.moussa' }, autreElevage: false, message: 'Ce téléphone était utilisé par ndiaye.moussa.',
+    });
+    await expect(a.synchro.lier('http://serveur.test', 'j', 'ndiaye.moussa', org('org-2'))).rejects.toMatchObject({ autreElevage: true });
     await expect(a.synchro.lier('http://serveur.test', 'j', 'ndiaye.moussa', org('org-2'))).rejects.toBeInstanceOf(ErreurAppareilAutre);
     expect(await a.base.logements.count()).toBe(1);
     await a.synchro.lier('http://serveur.test', 'j', 'autre.personne', org('org-1', 'soigneur'), { effacer: true });
     expect(await a.base.logements.count()).toBe(0);
     expect((await a.base.appareil.get('proprietaire'))?.valeur).toMatchObject({ identifiant: 'autre.personne' });
+  });
+
+  it('retient le nom de la personne pour lui parler par son nom si quelqu’un d’autre prend le téléphone', async () => {
+    const serveur = fauxServeur();
+    const base = new BaseElevage(`sync-${++n}`);
+    const s = creerSynchro(base, serveur.fetch);
+    await s.lier('http://serveur.test', 'j', 'sow.aminata', org('org-1'), { nom: 'Aminata Sow' });
+    await s.deconnecter();
+    await expect(s.lier('http://serveur.test', 'j', 'fall.awa', org('org-1', 'soigneur'))).rejects.toMatchObject({
+      personne: { nom: 'Aminata Sow', identifiant: 'sow.aminata' }, message: 'Ce téléphone était utilisé par Aminata Sow.',
+    });
   });
 
   it('prévient du nombre de saisies jamais envoyées avant d’effacer', async () => {
