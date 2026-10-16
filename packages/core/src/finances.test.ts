@@ -73,6 +73,10 @@ describe('mois et export', () => {
     const l = lignesFinance([op('recette', 'oeufs', 5000, '2026-10-03', { tiers: 'Dupont; "Fils"', lotId: 'a' })], []);
     expect(exporterCsv(l, () => 'Lot A')).toBe('Date;Type;Catégorie;Montant (FCFA);Lot;Client ou fournisseur;Payé;N°;Reste à régler (FCFA)\n2026-10-03;Recette;Œufs;5000;Lot A;"Dupont; ""Fils""";oui;;0');
   });
+  it('désamorce un nom qui ressemble à une formule de tableur', () => {
+    const l = lignesFinance([op('recette', 'oeufs', 5000, '2026-10-03', { tiers: '=HYPERLINK("x")' })], []);
+    expect(exporterCsv(l, () => '').split('\n')[1]).toContain(`"'=HYPERLINK(""x"")"`);
+  });
 });
 
 const paiement = (operationId: string, montant: number, date = '2026-10-10', mode: Paiement['mode'] = 'especes'): Paiement => ({ id: `p${++n}`, ...base, operationId, montant, date, mode });

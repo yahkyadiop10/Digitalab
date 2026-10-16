@@ -17,7 +17,7 @@ import {
   type Incubation,
   type TypeCouveuse,
 } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -131,8 +131,8 @@ export function FormCouveuse({ initial, fin }: { initial?: Couveuse; fin: () => 
     e.preventDefault();
     try {
       const capacites: Record<string, number> = {};
-      if (capPoule) capacites['poule'] = versNombre(capPoule);
-      if (capCaille) capacites['caille'] = versNombre(capCaille);
+      if (capPoule) capacites['poule'] = versEntier(capPoule);
+      if (capCaille) capacites['caille'] = versEntier(capCaille);
       const donnees = { nom, type, capacites, eclosoirSepare: eclosoir };
       if (initial) await repo.modifierCouveuse(initial.id, donnees);
       else await repo.creerCouveuse(donnees);
@@ -209,7 +209,7 @@ export function NouvelleIncubation({ elevage }: { elevage: Elevage }) {
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const id = await repo.mettreEnIncubation({ couveuseId, especeCode, nom: nom.trim() || nomAuto, nbOeufs: versNombre(n), miseEnPlace: date, origine });
+      const id = await repo.mettreEnIncubation({ couveuseId, especeCode, nom: nom.trim() || nomAuto, nbOeufs: versEntier(n), miseEnPlace: date, origine });
       notifier('Œufs mis en incubation ✓');
       aller(`couveuse/${id}`);
     } catch (err) {
@@ -389,7 +389,7 @@ function FormMirage({ inc, etape, fin }: { inc: Incubation; etape: number; fin: 
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const a = await repo.enregistrerMirage({ incubationId: inc.id, etape, clairs: versNombre(clairs), morts: versNombre(morts) });
+      const a = await repo.enregistrerMirage({ incubationId: inc.id, etape, clairs: versEntier(clairs), morts: versEntier(morts) });
       notifier('Mirage noté ✓', { annuler: () => repo.annuler(a) });
       fin();
     } catch (err) {
@@ -415,7 +415,7 @@ function FormEclosion({ elevage, inc, restants }: { elevage: Elevage; inc: Incub
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const lotId = await repo.enregistrerEclosion({ incubationId: inc.id, nes: versNombre(nes), mortsCoquille: versNombre(morts || '0'), logementId: logementId || null });
+      const lotId = await repo.enregistrerEclosion({ incubationId: inc.id, nes: versEntier(nes), mortsCoquille: versEntier(morts || '0'), logementId: logementId || null });
       notifier(lotId ? 'Éclosion notée, lot de poussins créé ✓' : 'Éclosion notée ✓');
       if (lotId) aller(`cheptel/${lotId}`);
     } catch (err) {

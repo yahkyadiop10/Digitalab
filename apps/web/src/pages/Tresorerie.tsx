@@ -4,7 +4,7 @@ import {
   type EntreeTresorerie, type ModePaiement, type TypeCompte,
 } from '@digitalab/core';
 import { Si } from '../components/Si';
-import { Champ, Nombre, Retour, useConfirmer, useNotifier, versNombre } from '../components/ui';
+import { Champ, Nombre, Retour, useConfirmer, useNotifier, versEntier } from '../components/ui';
 import { dateCourte, formatMontant, signe } from '../format';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
@@ -210,7 +210,7 @@ export function FormCompte({ elevage, id }: { elevage: Elevage; id?: string }) {
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await repo.enregistrerCompte({ ...(id ? { id } : {}), nom, type, soldeInitial: solde.trim() === '' ? 0 : Math.round(versNombre(solde)), dateInitiale, modes });
+      await repo.enregistrerCompte({ ...(id ? { id } : {}), nom, type, soldeInitial: solde.trim() === '' ? 0 : Math.round(versEntier(solde)), dateInitiale, modes });
       notifier('Compte enregistré ✓');
       aller(id ? `finances/tresorerie/compte/${id}` : 'finances/tresorerie');
     } catch (err) {
@@ -265,8 +265,8 @@ export function FormTransfert({ elevage, deInitial }: { elevage: Elevage; deInit
   const [erreur, setErreur] = useState<string | null>(null);
   const de = soldes.find((s) => s.compte.id === deId);
   const vers = soldes.find((s) => s.compte.id === versId);
-  const m = versNombre(montant) || 0;
-  const f = versNombre(frais) || 0;
+  const m = versEntier(montant) || 0;
+  const f = versEntier(frais) || 0;
 
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
@@ -284,7 +284,12 @@ export function FormTransfert({ elevage, deInitial }: { elevage: Elevage; deInit
       <Retour vers="finances/tresorerie" libelle="Trésorerie" />
       <h2>Transférer de l’argent</h2>
       <Champ libelle="Depuis le compte">
-        <select value={deId} onChange={(e) => setDeId(e.target.value)}>{soldes.map((s) => <option key={s.compte.id} value={s.compte.id}>{s.compte.nom} ({formatMontant(s.solde)})</option>)}</select>
+        <select value={deId} onChange={(e) => {
+          const nouveau = e.target.value;
+          setDeId(nouveau);
+          // Jamais un transfert d'un compte vers lui-même : le compte d'arrivée change s'il devient celui de départ.
+          if (nouveau === versId) setVersId(soldes.find((s) => s.compte.id !== nouveau)?.compte.id ?? '');
+        }}>{soldes.map((s) => <option key={s.compte.id} value={s.compte.id}>{s.compte.nom} ({formatMontant(s.solde)})</option>)}</select>
       </Champ>
       <Champ libelle="Vers le compte">
         <select value={versId} onChange={(e) => setVersId(e.target.value)}>{soldes.filter((s) => s.compte.id !== deId).map((s) => <option key={s.compte.id} value={s.compte.id}>{s.compte.nom} ({formatMontant(s.solde)})</option>)}</select>
@@ -316,12 +321,12 @@ export function FormPointage({ elevage, compteInitial }: { elevage: Elevage; com
   const [erreur, setErreur] = useState<string | null>(null);
   const s = soldes.find((x) => x.compte.id === compteId);
   const saisi = reel.trim() !== '';
-  const ecart = saisi && s ? Math.round(versNombre(reel)) - s.solde : 0;
+  const ecart = saisi && s ? Math.round(versEntier(reel)) - s.solde : 0;
 
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const r = await repo.pointer({ compteId, soldeReel: Math.round(versNombre(reel)), regulariser, note });
+      const r = await repo.pointer({ compteId, soldeReel: Math.round(versEntier(reel)), regulariser, note });
       notifier(r.ecart === 0 ? 'Comptage enregistré : aucun écart ✓' : regulariser ? 'Écart corrigé dans le solde ✓' : 'Écart noté : à expliquer', { annuler: () => repo.annuler(r) });
       aller(`finances/tresorerie/compte/${compteId}`);
     } catch (err) {

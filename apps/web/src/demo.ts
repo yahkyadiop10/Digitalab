@@ -1,9 +1,12 @@
 import { ajouterJours, soldesComptes } from '@digitalab/core';
 import { db } from './db';
-import { aujourdhui, nouvelId, repo } from './repo';
+import { aujourdhui, ErreurSaisie, nouvelId, repo } from './repo';
 
 /** Charge un petit élevage d'exemple pour essayer l'application. */
 export async function chargerDemo(): Promise<void> {
+  // L'exemple invente des ventes, des salaires, des soldes : il ne doit jamais se mêler à un vrai élevage.
+  if ((await db.connexion.get('serveur'))?.jeton) throw new ErreurSaisie('Cet appareil est relié à un compte : les données d’exemple iraient sur tous les téléphones de l’élevage.');
+  if ((await db.lots.count()) > 0 || (await db.operations.count()) > 0) throw new ErreurSaisie('Les données d’exemple ne s’ajoutent qu’à un élevage vide.');
   const auj = aujourdhui();
   const j = (n: number) => ajouterJours(auj, -n);
   const t = Date.now();
@@ -16,7 +19,7 @@ export async function chargerDemo(): Promise<void> {
   const cailles = await repo.creerLot({ nom: 'Cailles japonaises – lot 1', especeCode: 'caille', race: 'Japonaise', logementId: cages, effectif: 60 });
 
   // Les lots existent depuis deux semaines : l'historique ci-dessous n'est pas antérieur à leur arrivée.
-  await db.mouvements.toCollection().modify({ date: j(14) });
+  await db.mouvements.where('lotId').anyOf([soie, brahma, cailles]).modify({ date: j(14) });
 
   const series: [string, number[], number][] = [
     [soie, [9, 10, 9, 10, 9, 10, 9], 2.4],

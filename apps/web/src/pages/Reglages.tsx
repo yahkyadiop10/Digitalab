@@ -52,7 +52,7 @@ export function Reglages({ elevage }: { elevage: Elevage }) {
       {peut(elevage, 'admin.elevage') && (
         <>
           <h2>Mes données</h2>
-          <Donnees />
+          <Donnees elevage={elevage} />
         </>
       )}
       <h2>À propos</h2>
@@ -268,7 +268,7 @@ function Seuil({ libelle, valeur, onSave }: { libelle: string; valeur: number; o
   );
 }
 
-function Donnees() {
+function Donnees({ elevage }: { elevage: Elevage }) {
   const confirmer = useConfirmer();
   const notifier = useNotifier();
   const sauvegarder = async () => {
@@ -300,7 +300,12 @@ function Donnees() {
         <input type="file" accept="application/json,.json" hidden onChange={restaurer} />
       </label>
       <div className="actions">
-        <button className="lien" onClick={async () => { if (await confirmer('Ajouter des données d’exemple à votre élevage ?')) { await chargerDemo(); notifier('Exemple chargé'); } }}>Ajouter des données d’exemple</button>
+        {!elevage.moi.relie && elevage.donnees.lots.length === 0 && (
+          <button className="lien" onClick={async () => {
+            if (!await confirmer('Remplir l’élevage avec des données d’exemple ?')) return;
+            try { await chargerDemo(); notifier('Exemple chargé'); } catch (err) { notifier(err instanceof ErreurSaisie ? err.message : 'Chargement impossible.', { erreur: true }); }
+          }}>Essayer avec des données d’exemple</button>
+        )}
         <button className="lien danger" onClick={async () => { if (await confirmer('Effacer toutes les données de cet appareil ? Si un compte est relié, elles reviendront depuis le serveur à la prochaine synchronisation.')) { await repo.toutEffacer(); notifier('Données effacées'); } }}>Tout effacer</button>
       </div>
     </div>

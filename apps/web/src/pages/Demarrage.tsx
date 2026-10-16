@@ -1,6 +1,6 @@
 import { LogoProduit, Pied } from '../components/Marque';
 import { useState, type FormEvent } from 'react';
-import { Champ, Nombre, versNombre } from '../components/ui';
+import { Champ, Nombre, versEntier, versNombre } from '../components/ui';
 import { chargerDemo } from '../demo';
 import { ErreurSaisie, repo } from '../repo';
 
@@ -20,11 +20,11 @@ export function Demarrage() {
       const surface = (s: string) => (s ? versNombre(s) : null);
       if (poules && nbPoules) {
         const lg = await repo.creerLogement({ nom: 'Poulailler', type: 'batiment', surfaceM2: surface(surfacePoules) });
-        await repo.creerLot({ nom: 'Mes poules', especeCode: 'poule', logementId: lg, effectif: versNombre(nbPoules) });
+        await repo.creerLot({ nom: 'Mes poules', especeCode: 'poule', logementId: lg, effectif: versEntier(nbPoules) });
       }
       if (cailles && nbCailles) {
         const lg = await repo.creerLogement({ nom: 'Cages cailles', type: 'cage', surfaceM2: surface(surfaceCailles) });
-        await repo.creerLot({ nom: 'Mes cailles', especeCode: 'caille', logementId: lg, effectif: versNombre(nbCailles) });
+        await repo.creerLot({ nom: 'Mes cailles', especeCode: 'caille', logementId: lg, effectif: versEntier(nbCailles) });
       }
       await repo.ecrireReglage('nomElevage', nom.trim());
       await repo.ecrireReglage('demarrageFait', true);
@@ -62,7 +62,7 @@ export function Demarrage() {
         <button className="bouton">Commencer</button>
       </form>
       <div className="actions">
-        <button className="lien" onClick={() => void chargerDemo()}>Essayer avec des données d’exemple</button>
+        <button className="lien" onClick={() => chargerDemo().catch((err) => setErreur(err instanceof ErreurSaisie ? err.message : 'Chargement impossible.'))}>Essayer avec des données d’exemple</button>
         <button className="lien" onClick={() => void repo.ecrireReglage('demarrageFait', true)}>Passer</button>
         <a className="lien" href="#/compte">J’ai déjà un compte : retrouver mon élevage</a>
       </div>

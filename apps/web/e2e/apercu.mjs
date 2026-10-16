@@ -33,11 +33,10 @@ try {
   await app.getByRole('heading', { name: 'Trésorerie' }).waitFor();
   assert.equal(await app.locator('a.compte').count(), 4);
 
-  etape('2 « Ajouter des données d’exemple » répond, même sans boîte de dialogue du navigateur');
+  etape('2 l’exemple ne se recharge pas par-dessus un élevage déjà rempli');
   await app.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
-  await app.getByRole('button', { name: 'Ajouter des données d’exemple' }).click();
-  await app.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
-  await app.getByText('Exemple chargé').waitFor();
+  await app.getByRole('button', { name: 'Télécharger une sauvegarde' }).waitFor();
+  assert.equal(await app.getByRole('button', { name: /données d’exemple/ }).count(), 0);
 
   etape('3 « Gestion des utilisateurs » est visible ; connexion avec le compte de démonstration, puis choix du mot de passe');
   await app.getByRole('link', { name: /Gestion des utilisateurs/ }).click();

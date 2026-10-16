@@ -1,13 +1,19 @@
-import { COMPTES_PAR_DEFAUT, normaliserPolitique, effectifs, jourLocal, MODES_PAIEMENT, soldesComptes, type CompteTresorerie, type TypeCompte, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
+import { COMPTES_PAR_DEFAUT, normaliserPolitique, effectifs, jourLocal, MODES_PAIEMENT, soldesComptes, type CompteTresorerie, type TypeCompte, prochainNumeroFacture, reglement, totalLignes, type Employe, type LigneDocument, type ProfilElevage, type ModePaiement, type NatureSalaire, type OperationFinanciere, type Paiement, type Tiers, naissanceEstimee, type EtatArrivee, type EtatNote, type SensOperation, oeufsRestants, type EvenementSante, type ProtocoleVaccin, type ResultatTraitement, placesPourNouvelleMise, profilDe, type Jour, type Lot, type TypeCouveuse, type TypeLogement, type TypeMouvement } from '@digitalab/core';
 import { db, TABLES_DONNEES, type BaseElevage } from './db';
 import { fusionnerReglages } from './reglages';
 
 export class ErreurSaisie extends Error {}
 
-export const nouvelId = (): string =>
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+/** Identifiant unique et imprévisible (randomUUID n'existe pas hors https : on tire alors 16 octets au hasard). */
+export const nouvelId = (): string => {
+  if (typeof crypto === 'undefined') throw new Error('Générateur aléatoire indisponible');
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const o = crypto.getRandomValues(new Uint8Array(16));
+  o[6] = (o[6]! & 0x0f) | 0x40;
+  o[8] = (o[8]! & 0x3f) | 0x80;
+  const h = [...o].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
 
 // Strictement croissant sur l'appareil : deux modifications d'une même fiche ne portent jamais le même instant,
 // sinon la synchronisation (la plus récente l'emporte) pourrait garder la mauvaise.
@@ -31,6 +37,11 @@ function entierPositif(n: number, libelle: string): number {
 function decimalPositif(n: number, libelle: string): number {
   if (!Number.isFinite(n) || n <= 0) throw new ErreurSaisie(`${libelle} : entrez un nombre supérieur à zéro.`);
   return n;
+}
+
+/** Ce qui reste à régler en comptant aussi les paiements qui attendent une validation : on ne paie pas deux fois la même chose. */
+function resteAvecAttente(op: OperationFinanciere, paiements: Paiement[]): number {
+  return reglement(op, paiements.map((p) => (p.statut === 'a_valider' ? { ...p, statut: 'validee' as const } : p))).reste;
 }
 
 function nettoyerCapacites(c: Record<string, number>): Record<string, number> {
@@ -268,10 +279,15 @@ export function creerRepo(base: BaseElevage = db) {
       const inc = await base.incubations.get(incubationId);
       if (!inc?.eclosion) throw new ErreurSaisie('Aucune éclosion à annuler.');
       const lotId = inc.eclosion.lotId;
-      await base.transaction('rw', base.lots, base.mouvements, base.pontes, base.distributions, base.incubations, async () => {
+      await base.transaction('rw', [base.lots, base.mouvements, base.pontes, base.distributions, base.evenementsSante, base.operations, base.incubations], async () => {
         if (lotId) {
           const mouvements = (await base.mouvements.where('lotId').equals(lotId).toArray()).filter((m) => !m.supprimeLe);
-          const autres = mouvements.filter((m) => m.type !== 'naissance').length + (await base.pontes.where('lotId').equals(lotId).filter((p) => !p.supprimeLe).count()) + (await base.distributions.where('lotId').equals(lotId).filter((x) => !x.supprimeLe).count());
+          const vivant = (x: { supprimeLe?: number | null }) => !x.supprimeLe;
+          const autres = mouvements.filter((m) => m.type !== 'naissance').length
+            + (await base.pontes.where('lotId').equals(lotId).filter(vivant).count())
+            + (await base.distributions.where('lotId').equals(lotId).filter(vivant).count())
+            + (await base.evenementsSante.where('lotId').equals(lotId).filter(vivant).count())
+            + (await base.operations.filter((o) => o.lotId === lotId && vivant(o)).count());
           if (autres > 0) throw new ErreurSaisie('Le lot de poussins a déjà un historique : supprimez-le d’abord.');
           for (const m of mouvements) await base.mouvements.update(m.id, { supprimeLe: maintenant(), misAJour: maintenant() });
           await base.lots.update(lotId, { supprimeLe: maintenant(), misAJour: maintenant() });
@@ -393,8 +409,8 @@ export function creerRepo(base: BaseElevage = db) {
       if (!MODES_PAIEMENT.includes(mode)) throw new ErreurSaisie('Moyen de paiement inconnu.');
       const jour = date ?? aujourdhui();
       if (jour > aujourdhui()) throw new ErreurSaisie('La date ne peut pas être dans le futur.');
-      const { reste } = reglement(op, await base.paiements.where('operationId').equals(operationId).toArray());
-      if (montant > reste) throw new ErreurSaisie(reste === 0 ? 'Cette opération est déjà entièrement réglée.' : `Il ne reste que ${reste} FCFA à régler.`);
+      const reste = resteAvecAttente(op, await base.paiements.where('operationId').equals(operationId).toArray());
+      if (montant > reste) throw new ErreurSaisie(reste === 0 ? 'Cette opération est déjà entièrement réglée (ou un paiement attend la validation d’un responsable).' : `Il ne reste que ${reste} FCFA à régler.`);
       const id = nouvelId();
       await base.paiements.add({ id, misAJour: maintenant(), operationId, date: jour, montant, mode, ...(aValider ? { statut: 'a_valider' as const } : {}) });
       return { table: 'paiements', id };
@@ -402,6 +418,13 @@ export function creerRepo(base: BaseElevage = db) {
 
     /** Un responsable valide une dépense ou un paiement saisi par quelqu'un d'autre. */
     async valider(a: { table: 'operations' | 'paiements'; id: string }): Promise<void> {
+      if (a.table === 'paiements') {
+        const p = await base.paiements.get(a.id);
+        const op = p && (await base.operations.get(p.operationId));
+        if (!p || p.supprimeLe || !op || op.supprimeLe) throw new ErreurSaisie('Ce paiement n’existe plus.');
+        const { reste } = reglement(op, await base.paiements.where('operationId').equals(op.id).toArray());
+        if (p.montant > reste) throw new ErreurSaisie(`Ce paiement dépasse ce qui reste à régler (${reste} FCFA) : annulez-le.`);
+      }
       await base.table(a.table).update(a.id, { statut: 'validee', misAJour: maintenant() });
     },
 
@@ -421,7 +444,7 @@ export function creerRepo(base: BaseElevage = db) {
     async marquerPaye(id: string, mode: ModePaiement = 'autre'): Promise<void> {
       const op = await base.operations.get(id);
       if (!op) throw new ErreurSaisie('Opération introuvable.');
-      const { reste } = reglement(op, await base.paiements.where('operationId').equals(id).toArray());
+      const reste = resteAvecAttente(op, await base.paiements.where('operationId').equals(id).toArray());
       if (reste > 0) await this.ajouterPaiement(id, reste, mode);
     },
 
@@ -592,6 +615,8 @@ export function creerRepo(base: BaseElevage = db) {
     async creerQuarantaine(d: {
       nom: string; especeCode: string; race?: string; nombre: number; ageJours?: number; origine?: string; arrivee?: Jour; dureeJours: number;
       logementId?: string | null; alimentation?: string; etatArrivee?: EtatArrivee; noteArrivee?: string; prixTotal?: number;
+      /** Moyen de paiement du prix, et s'il attend la validation d'un responsable (comme une dépense ordinaire). */
+      mode?: ModePaiement; aValider?: boolean; paiementAValider?: boolean;
     }): Promise<string> {
       const nom = d.nom.trim();
       if (!nom) throw new ErreurSaisie('Donnez un nom à cet arrivage.');
@@ -604,7 +629,7 @@ export function creerRepo(base: BaseElevage = db) {
       const logementId = d.logementId || (await this.assurerZoneQuarantaine());
       const lotId = nouvelId();
       const id = nouvelId();
-      await base.transaction('rw', base.lots, base.mouvements, base.quarantaines, base.operations, async () => {
+      await base.transaction('rw', [base.lots, base.mouvements, base.quarantaines, base.operations, base.paiements, base.tiers], async () => {
         await base.lots.add({
           id: lotId, misAJour: maintenant(), nom, especeCode: d.especeCode, logementId,
           ...(d.race?.trim() ? { race: d.race.trim() } : {}),
@@ -621,7 +646,11 @@ export function creerRepo(base: BaseElevage = db) {
           ...(d.noteArrivee?.trim() ? { noteArrivee: d.noteArrivee.trim() } : {}),
         });
         if (d.prixTotal) {
-          await base.operations.add({ id: nouvelId(), misAJour: maintenant(), date: arrivee, sens: 'depense', categorie: 'achat_animaux', montant: d.prixTotal, lotId, paye: true, payeLe: arrivee, ...(d.origine?.trim() ? { tiers: d.origine.trim() } : {}) });
+          // Une dépense ordinaire, avec son paiement : elle sort de la caisse (ou de Wave…) comme les autres.
+          await this.ajouterOperation({
+            sens: 'depense', categorie: 'achat_animaux', montant: d.prixTotal, date: arrivee, lotId, paye: true, mode: d.mode ?? 'especes',
+            ...(d.origine?.trim() ? { tiers: d.origine.trim() } : {}), aValider: !!d.aValider, paiementAValider: !!d.paiementAValider,
+          });
         }
       });
       return id;
@@ -690,6 +719,12 @@ export function creerRepo(base: BaseElevage = db) {
     },
 
     async annuler(a: Annulation): Promise<void> {
+      if (a.table === 'mouvements') {
+        const m = await base.mouvements.get(a.id);
+        if (m && !m.supprimeLe && m.quantite > 0 && (await effectifLot(m.lotId)) - m.quantite < 0) {
+          throw new ErreurSaisie('Impossible d’annuler cette arrivée : des animaux de ce lot sont déjà sortis ou morts. Annulez d’abord ces sorties.');
+        }
+      }
       await base.table(a.table).update(a.id, { supprimeLe: maintenant(), misAJour: maintenant() });
     },
 
@@ -717,7 +752,8 @@ export function creerRepo(base: BaseElevage = db) {
     async exporter(): Promise<string> {
       const dump: Record<string, unknown[]> = {};
       for (const t of TABLES_DONNEES) dump[t] = await base.table(t).toArray();
-      return JSON.stringify({ application: 'digitalab', version: 1, exporteLe: new Date().toISOString(), donnees: dump });
+      const lien = await base.connexion.get('serveur');
+      return JSON.stringify({ application: 'digitalab', version: 1, exporteLe: new Date().toISOString(), ...(lien?.organisationId ? { organisationId: lien.organisationId } : {}), donnees: dump });
     },
 
     /** Remplace toutes les données par celles d'une sauvegarde. */
@@ -728,13 +764,26 @@ export function creerRepo(base: BaseElevage = db) {
       } catch {
         throw new ErreurSaisie('Ce fichier n’est pas une sauvegarde valide.');
       }
-      if (obj.application !== 'digitalab' || !obj.donnees) throw new ErreurSaisie('Ce fichier n’est pas une sauvegarde AviMaster.');
+      if (obj.application !== 'digitalab' || !obj.donnees || typeof obj.donnees !== 'object') throw new ErreurSaisie('Ce fichier n’est pas une sauvegarde AviMaster.');
       const donnees = obj.donnees;
+      for (const t of TABLES_DONNEES) {
+        const lignes = donnees[t];
+        if (lignes === undefined) continue;
+        const bonne = (t === 'reglages' || t === 'etatsAlertes')
+          ? (l: unknown) => !!l && typeof l === 'object' && typeof (l as { cle?: unknown }).cle === 'string'
+          : (l: unknown) => !!l && typeof l === 'object' && typeof (l as { id?: unknown }).id === 'string' && typeof (l as { misAJour?: unknown }).misAJour === 'number';
+        if (!Array.isArray(lignes) || !lignes.every(bonne)) throw new ErreurSaisie('Cette sauvegarde est abîmée : elle n’a pas été restaurée.');
+      }
+      const lien = await base.connexion.get('serveur');
+      const origine = (obj as { organisationId?: unknown }).organisationId;
+      if (lien?.jeton && typeof origine === 'string' && origine !== lien.organisationId) {
+        throw new ErreurSaisie('Cette sauvegarde vient d’un autre élevage : elle ne peut pas être restaurée sur un téléphone relié à celui-ci.');
+      }
       await base.transaction('rw', TABLES_DONNEES.map((t) => base.table(t)), async () => {
         for (const t of TABLES_DONNEES) {
           await base.table(t).clear();
           const lignes = donnees[t];
-          if (Array.isArray(lignes) && lignes.length) await base.table(t).bulkAdd(lignes);
+          if (Array.isArray(lignes) && lignes.length) await base.table(t).bulkPut(lignes);
         }
       });
       await repartirDeZero();

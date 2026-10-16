@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { LIBELLES_MODES, MODES_PAIEMENT, stockAlimentKg, type ModePaiement } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre } from '../components/ui';
+import { LIBELLES_MODES, MODES_PAIEMENT, peutValiderDepense, stockAlimentKg, type ModePaiement } from '@digitalab/core';
+import { Champ, Nombre, Retour, useNotifier, versEntier, versNombre } from '../components/ui';
 import { CAUSES_DECES } from '../i18n/fr';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { peut, TUILES_SAISIE } from '../droits';
@@ -91,10 +91,10 @@ function FormLot({ elevage, type, lotInitial }: { elevage: Elevage; type: 'ponte
     );
   }
 
-  const valeur = versNombre(n);
+  const valeur = type === 'aliment' ? versNombre(n) : versEntier(n);
   const soumettre = (e: FormEvent) => {
     e.preventDefault();
-    if (type === 'ponte') return envoyer(() => repo.ajouterPonte({ lotId, nombre: valeur, casses: casses ? versNombre(casses) : 0 }), 'Ponte enregistrée ✓');
+    if (type === 'ponte') return envoyer(() => repo.ajouterPonte({ lotId, nombre: valeur, casses: casses ? versEntier(casses) : 0 }), 'Ponte enregistrée ✓');
     if (type === 'aliment') return envoyer(() => repo.ajouterDistribution({ lotId, quantiteKg: valeur }), 'Aliment enregistré ✓');
     if (type === 'deces') return envoyer(() => repo.ajouterDeces({ lotId, nombre: valeur, cause }), 'Décès enregistré');
     return envoyer(() => repo.enregistrerSortie({ lotId, type: sortie, nombre: valeur }), sortie === 'vente' ? 'Vente enregistrée ✓' : 'Réforme enregistrée ✓');
@@ -145,10 +145,12 @@ function FormStock({ elevage }: { elevage: Elevage }) {
   const [kg, setKg] = useState('');
   const [prix, setPrix] = useState('');
   const [moyen, setMoyen] = useState<ModePaiement>('especes');
+  // Le serveur n'accepte un prix d'achat que de qui peut valider les achats : les autres notent seulement les kilos.
+  const notePrix = peutValiderDepense(elevage.moi.droits, 'aliment');
   const { occupe, erreur, envoyer } = useEnvoi();
   const soumettre = (e: FormEvent) => {
     e.preventDefault();
-    if (mode === 'achat') return envoyer(() => repo.ajouterAchatAliment({ quantiteKg: versNombre(kg), prixTotal: prix ? versNombre(prix) : null, mode: moyen }), 'Achat enregistré ✓');
+    if (mode === 'achat') return envoyer(() => repo.ajouterAchatAliment({ quantiteKg: versNombre(kg), prixTotal: notePrix && prix ? versEntier(prix) : null, mode: moyen }), 'Achat enregistré ✓');
     return envoyer(() => repo.corrigerStock(stock, versNombre(kg)), 'Stock mis à jour ✓');
   };
   return (
@@ -163,12 +165,12 @@ function FormStock({ elevage }: { elevage: Elevage }) {
       <Champ libelle={mode === 'achat' ? 'Quantité (kg)' : 'Stock compté (kg)'}>
         <Nombre valeur={kg} onChange={setKg} pas={5} unite="kg" />
       </Champ>
-      {mode === 'achat' && (
+      {mode === 'achat' && notePrix && (
         <Champ libelle="Prix total payé en FCFA (facultatif)">
           <Nombre valeur={prix} onChange={setPrix} pas={500} unite="FCFA" />
         </Champ>
       )}
-      {mode === 'achat' && prix && (
+      {mode === 'achat' && notePrix && prix && (
         <Champ libelle="Payé avec" aide="L’argent sort du compte correspondant (caisse, Wave…).">
           <select value={moyen} onChange={(e) => setMoyen(e.target.value as ModePaiement)}>{MODES_PAIEMENT.map((m) => <option key={m} value={m}>{LIBELLES_MODES[m]}</option>)}</select>
         </Champ>

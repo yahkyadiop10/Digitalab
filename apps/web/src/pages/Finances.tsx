@@ -27,7 +27,7 @@ import {
 } from '@digitalab/core';
 import { Si } from '../components/Si';
 import { ResumeTresorerie } from './Tresorerie';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { dateCourte, formatMontant, signe } from '../format';
 import { aller } from '../route';
@@ -168,7 +168,7 @@ export function PageFinances({ elevage }: { elevage: Elevage }) {
             <div key={l.cle} className="ligne">
               <span>
                 {l.automatique ? <>{dateCourte(l.date)} · {LIBELLES_CATEGORIES[l.categorie]}</> : <a className="lien" href={`#/finances/op/${l.cle}`}>{dateCourte(l.date)} · {LIBELLES_CATEGORIES[l.categorie] ?? l.categorie}</a>}
-                {l.numero ? ` · ${l.numero}` : ''}{l.lotId ? ` · ${noms.lot(l.lotId)}` : ''}{l.tiers ? ` · ${l.tiers}` : ''}{l.automatique ? ' · achat d’aliment' : ''}
+                {l.numero ? ` · ${l.numero}` : ''}{l.lotId ? ` · ${noms.lot(l.lotId)}` : ''}{l.tiers ? ` · ${l.tiers}` : ''}{l.cle.startsWith('stock:') ? ' · noté avec le stock' : l.cle.startsWith('transfert:') ? ' · noté avec le transfert' : ''}
                 {l.reste > 0 && <><br /><small className="muet">reste {formatMontant(l.reste)} à {l.sens === 'recette' ? 'encaisser' : 'payer'}</small></>}
               </span>
               <b className={l.sens === 'recette' ? 'montant gain' : 'montant'}>{l.sens === 'recette' ? '+' : '−'} {formatMontant(l.montant)}</b>
@@ -241,7 +241,7 @@ const LIGNE_VIDE: LigneSaisie = { libelle: '', quantite: '1', prix: '' };
 type Reglage = 'tout' | 'acompte' | 'rien';
 
 export function FormOperation({ elevage, sens, lotInitial }: { elevage: Elevage; sens: SensOperation; lotInitial: string | null }) {
-  const { donnees, operations, tiers: carnet, maintenant } = elevage;
+  const { donnees, tiers: carnet, maintenant } = elevage;
   const notifier = useNotifier();
   const categories = sens === 'depense' ? CATEGORIES_DEPENSE : CATEGORIES_RECETTE;
   const auj = jourLocal(maintenant);
@@ -262,11 +262,11 @@ export function FormOperation({ elevage, sens, lotInitial }: { elevage: Elevage;
   const [note, setNote] = useState('');
   const [erreur, setErreur] = useState<string | null>(null);
 
-  const lignesNum = lignes.map((l) => ({ libelle: l.libelle, quantite: versNombre(l.quantite), prixUnitaire: versNombre(l.prix) }));
+  const lignesNum = lignes.map((l) => ({ libelle: l.libelle, quantite: versEntier(l.quantite), prixUnitaire: versEntier(l.prix) }));
   const utiles = lignesNum.filter((l, i) => l.libelle.trim() || lignes[i]!.prix.trim());
-  const total = detaille ? totalLignes(utiles.map((l) => ({ ...l, quantite: l.quantite || 0, prixUnitaire: l.prixUnitaire || 0 })), versNombre(remise) || 0) : versNombre(montant) || 0;
+  const total = detaille ? totalLignes(utiles.map((l) => ({ ...l, quantite: l.quantite || 0, prixUnitaire: l.prixUnitaire || 0 })), versEntier(remise) || 0) : versEntier(montant) || 0;
   const connu = carnet.find((t) => t.nom.toLowerCase() === tiers.trim().toLowerCase());
-  const numeroAuto = sens === 'recette' && detaille ? prochainNumeroFacture(operations, Number(date.slice(0, 4))) : '';
+  const numeroAuto = sens === 'recette' && detaille ? prochainNumeroFacture(elevage.toutesOperations, Number(date.slice(0, 4))) : '';
 
   const majLigne = (i: number, champ: keyof LigneSaisie, v: string) => setLignes(lignes.map((l, k) => (k === i ? { ...l, [champ]: v } : l)));
 
@@ -278,10 +278,10 @@ export function FormOperation({ elevage, sens, lotInitial }: { elevage: Elevage;
         paye: reglage === 'tout', mode,
         aValider: sens === 'depense' && !peutValiderDepense(elevage.moi.droits, categorie),
         paiementAValider: sens === 'depense' && !aDroit(elevage.moi.droits, 'finances.valider_paiement'),
-        ...(reglage === 'acompte' ? { acompte: versNombre(acompte) } : {}),
+        ...(reglage === 'acompte' ? { acompte: versEntier(acompte) } : {}),
         ...(reglage !== 'tout' && echeance ? { echeance } : {}),
         ...(numero.trim() ? { numero } : {}),
-        ...(detaille ? { lignes: utiles.map((l) => ({ ...l, quantite: l.quantite, prixUnitaire: l.prixUnitaire })), remise: versNombre(remise) || 0 } : { montant: versNombre(montant) }),
+        ...(detaille ? { lignes: utiles.map((l) => ({ ...l, quantite: l.quantite, prixUnitaire: l.prixUnitaire })), remise: versEntier(remise) || 0 } : { montant: versEntier(montant) }),
       });
       notifier(sens === 'depense' ? (peutValiderDepense(elevage.moi.droits, categorie) ? 'Dépense notée ✓' : 'Dépense notée ✓ : elle attend la validation d’un responsable') : detaille ? 'Facture enregistrée ✓' : 'Recette notée ✓', { annuler: () => repo.annuler(a) });
       aller(detaille && sens === 'recette' ? `finances/op/${a.id}` : 'finances');

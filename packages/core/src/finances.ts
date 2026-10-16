@@ -330,10 +330,12 @@ export function suiviSalaires(employes: Employe[], operations: OperationFinancie
 
 /** Texte CSV (séparateur point-virgule, lisible par Excel en français) pour le comptable. */
 export function exporterCsv(lignes: LigneFinance[], nomLot: (id?: string | null) => string): string {
+  // Un texte qui commence par = + - @ serait lu comme une formule par le tableur : on le désamorce.
+  const texte = (v: string) => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
   const echapper = (v: string) => (/[;"\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
   const entete = ['Date', 'Type', 'Catégorie', 'Montant (FCFA)', 'Lot', 'Client ou fournisseur', 'Payé', 'N°', 'Reste à régler (FCFA)'];
   const corps = [...lignes].sort((a, b) => a.date.localeCompare(b.date)).map((l) =>
-    [l.date, l.sens === 'recette' ? 'Recette' : 'Dépense', LIBELLES_CATEGORIES[l.categorie] ?? l.categorie, String(l.montant), l.lotId ? nomLot(l.lotId) : '', l.tiers ?? '', l.reste === 0 ? 'oui' : 'non', l.numero ?? '', String(l.reste)].map(echapper).join(';'),
+    [l.date, l.sens === 'recette' ? 'Recette' : 'Dépense', LIBELLES_CATEGORIES[l.categorie] ?? l.categorie, String(l.montant), texte(l.lotId ? nomLot(l.lotId) : ''), texte(l.tiers ?? ''), l.reste === 0 ? 'oui' : 'non', texte(l.numero ?? ''), String(l.reste)].map(echapper).join(';'),
   );
   return [entete.join(';'), ...corps].join('\n');
 }

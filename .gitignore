@@ -5,3 +5,7 @@ dev-dist/
 .DS_Store
 apps/web/e2e/*.png
 dist-apercu/
+.env
+.env.*
+*.pem
+*.key

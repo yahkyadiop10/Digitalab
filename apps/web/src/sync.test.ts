@@ -179,6 +179,23 @@ describe('synchronisation côté appareil', () => {
     expect(await b.synchro.lire()).toMatchObject({ role: 'personnalise', fonction: 'Responsable bâtiment A', droits: ['cheptel.voir', 'finances.voir_recettes'], zones: ['bat-a'] });
   });
 
+  it('quand les droits se réduisent, ce qui n’est plus permis disparaît du téléphone, sans perdre les saisies pas encore envoyées', async () => {
+    const a = await appareil(serveur);
+    const lotId = await a.repo.creerLot({ nom: 'Bâtiment B', especeCode: 'poule', effectif: 5 });
+    await a.synchro.synchroniser();
+    const b = await appareil(serveur, 'soigneur');
+    serveur.definirDroits({ role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
+    await b.synchro.synchroniser();
+    expect(await b.base.lots.get(lotId)).toBeTruthy();
+    // Le soigneur est réservé au bâtiment A : le serveur ne lui envoie plus le lot du bâtiment B.
+    for (const cle of [...serveur.lignes.keys()]) if (cle.startsWith('lots/') || cle.startsWith('mouvements/')) serveur.lignes.delete(cle);
+    await b.repo.ajouterPonte({ lotId: 'lot-a', nombre: 7 });
+    serveur.definirDroits({ role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: ['bat-a'] });
+    await b.synchro.synchroniser();
+    expect(await b.base.lots.get(lotId)).toBeUndefined();
+    expect((await b.base.pontes.toArray()).map((p) => p.nombre)).toEqual([7]);
+  });
+
   it('n’envoie pas les tables que les droits ne permettent pas d’écrire', async () => {
     const a = await appareil(serveur, 'soigneur');
     serveur.definirDroits({ role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
@@ -349,8 +366,10 @@ describe('comptes : identifiant et mot de passe', () => {
     const s = creerSynchro(base, f);
     await s.lier('http://serveur.test', 'jeton-ancien', 'sow.awa', { id: 'org-1', nom: 'Ferme test', role: 'soigneur', droits: droitsEffectifs('soigneur', null), zones: [] });
     expect(await s.renouvelerSession('canard9')).toBe('ok');
-    expect(vus.at(-1)!.corps).toMatchObject({ identifiant: 'sow.awa', motDePasse: 'canard9' });
+    expect(vus.find((v) => v.chemin === '/v1/auth/connexion')!.corps).toMatchObject({ identifiant: 'sow.awa', motDePasse: 'canard9' });
     expect((await base.connexion.get('serveur'))?.jeton).toBe('jeton-neuf');
+    // L'ancienne session est fermée sur le serveur.
+    expect(vus.find((v) => v.chemin === '/v1/auth/deconnexion')?.autorisation).toBe('Bearer jeton-ancien');
   });
 
   it('signale un mot de passe provisoire redonné par l’administrateur sans changer la session', async () => {

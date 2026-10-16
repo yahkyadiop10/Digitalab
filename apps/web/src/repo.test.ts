@@ -23,6 +23,14 @@ describe('lots et effectifs', () => {
     expect(await effectif(id)).toBe(12);
   });
 
+  it('n’annule pas une arrivée dont les animaux sont déjà sortis : l’effectif ne devient jamais négatif', async () => {
+    const id = await repo.creerLot({ nom: 'A', especeCode: 'poule', effectif: 10 });
+    const arrivee = await repo.ajouterAnimaux(id, 5);
+    await repo.enregistrerSortie({ lotId: id, type: 'vente', nombre: 12 });
+    await expect(repo.annuler(arrivee)).rejects.toThrow(/déjà sortis/);
+    expect(await effectif(id)).toBe(3);
+  });
+
   it('refuse un lot sans nom ou sans animaux', async () => {
     await expect(repo.creerLot({ nom: ' ', especeCode: 'poule', effectif: 5 })).rejects.toBeInstanceOf(ErreurSaisie);
     await expect(repo.creerLot({ nom: 'A', especeCode: 'poule', effectif: 0 })).rejects.toBeInstanceOf(ErreurSaisie);
@@ -104,6 +112,16 @@ describe('sauvegarde', () => {
   it('refuse un fichier qui n’est pas une sauvegarde', async () => {
     await expect(repo.importer('pas du json')).rejects.toBeInstanceOf(ErreurSaisie);
     await expect(repo.importer('{"a":1}')).rejects.toBeInstanceOf(ErreurSaisie);
+  });
+
+  it('refuse une sauvegarde abîmée sans rien effacer, et celle d’un autre élevage sur un téléphone relié', async () => {
+    await repo.creerLot({ nom: 'A', especeCode: 'caille', effectif: 40 });
+    await expect(repo.importer(JSON.stringify({ application: 'digitalab', donnees: { lots: [{ nom: 'sans identifiant' }] } }))).rejects.toThrow(/abîmée/);
+    expect(await base.lots.count()).toBe(1);
+    await base.connexion.put({ cle: 'serveur', url: 'http://s', jeton: 'j', identifiant: 'x', organisationId: 'org-1', organisationNom: 'F', role: 'proprietaire', droits: [], zones: [], derniereSeq: 0, dernierEnvoi: 0 } as never);
+    const autre = JSON.stringify({ application: 'digitalab', organisationId: 'org-2', donnees: { lots: [] } });
+    await expect(repo.importer(autre)).rejects.toThrow(/autre élevage/);
+    expect(await base.lots.count()).toBe(1);
   });
 });
 
@@ -251,6 +269,23 @@ describe('finances', () => {
     await repo.ajouterPaiement(f.id, 10000, 'wave');
   });
 
+  it('un paiement qui attend sa validation compte déjà : la même dépense ne se paie pas deux fois', async () => {
+    const f = await repo.ajouterOperation({ sens: 'depense', categorie: 'materiel', montant: 10000, paye: false });
+    const p1 = await repo.ajouterPaiement(f.id, 10000, 'especes', undefined, true);
+    await expect(repo.ajouterPaiement(f.id, 10000, 'wave', undefined, true)).rejects.toThrow(/attend la validation/);
+    await repo.valider({ table: 'paiements', id: p1.id });
+    expect((await base.paiements.get(p1.id))?.statut).toBe('validee');
+  });
+
+  it('refuse de valider un paiement qui dépasserait le total (deux saisies faites sur deux téléphones)', async () => {
+    const f = await repo.ajouterOperation({ sens: 'depense', categorie: 'materiel', montant: 10000, paye: false });
+    const p1 = await repo.ajouterPaiement(f.id, 10000, 'especes', undefined, true);
+    // Le même paiement saisi sur un autre téléphone arrive par la synchronisation.
+    await base.paiements.add({ id: 'autre', misAJour: Date.now(), operationId: f.id, date: aujourdhui(), montant: 10000, mode: 'wave', statut: 'a_valider' });
+    await repo.valider({ table: 'paiements', id: p1.id });
+    await expect(repo.valider({ table: 'paiements', id: 'autre' })).rejects.toThrow(/dépasse/);
+  });
+
   it('refuse un acompte supérieur au total, une ligne sans nom ou sans quantité, une échéance passée', async () => {
     await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', montant: 1000, paye: false, acompte: 2000 })).rejects.toBeInstanceOf(ErreurSaisie);
     await expect(repo.ajouterOperation({ sens: 'recette', categorie: 'oeufs', lignes: [{ libelle: ' ', quantite: 1, prixUnitaire: 5 }] })).rejects.toBeInstanceOf(ErreurSaisie);
@@ -343,7 +378,10 @@ describe('quarantaine des nouveaux arrivants', () => {
   it('note l’achat dans les finances quand un prix est donné', async () => {
     const id = await arrivage({ prixTotal: 64000, origine: 'M. Sow' });
     const lotId = (await base.quarantaines.get(id))!.lotId;
-    expect((await base.operations.toArray())[0]).toMatchObject({ sens: 'depense', categorie: 'achat_animaux', montant: 64000, lotId, tiers: 'M. Sow', paye: true });
+    const op = (await base.operations.toArray())[0]!;
+    expect(op).toMatchObject({ sens: 'depense', categorie: 'achat_animaux', montant: 64000, lotId, tiers: 'M. Sow' });
+    // Le prix est payé par un vrai règlement : il sort de la caisse dans la trésorerie.
+    expect(await base.paiements.toArray()).toMatchObject([{ operationId: op.id, montant: 64000, mode: 'especes' }]);
   });
 
   it('refuse un arrivage sans nom, sans animaux, sans durée ou daté du futur', async () => {

@@ -300,7 +300,7 @@ try {
   const cadre = integree.frameLocator('#f');
   await cadre.getByRole('button', { name: 'Passer' }).click();
   await cadre.getByRole('banner').getByRole('link', { name: 'Réglages' }).click();
-  await cadre.getByRole('button', { name: 'Ajouter des données d’exemple' }).click();
+  await cadre.getByRole('button', { name: 'Essayer avec des données d’exemple' }).click();
   await cadre.getByRole('alertdialog').getByRole('button', { name: 'Oui' }).click();
   await cadre.getByText('Exemple chargé').waitFor();
   await neuf.close();

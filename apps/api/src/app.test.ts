@@ -4,9 +4,10 @@ import { configTest, creerBanc, creerProprietaire, inviter as inviterBanc, seCon
 import { lireConfig } from './config.js';
 import { hacherMotDePasse, verifierMotDePasse } from './securite.js';
 import { creerElevage, reinitialiserDepuisLeServeur, sansAdministrateur } from './installation.js';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { brotliCompressSync } from 'node:zlib';
 
 const MAINTENANT = 1_790_000_000_000;
 const enreg = (table: ChangementSync['table'], id: string, misAJour: number, extra: Record<string, unknown> = {}): ChangementSync => ({ table, enregistrement: { id, misAJour, ...extra } });
@@ -83,6 +84,9 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
     it('distribue l’application à son adresse : le lien ouvre la page, l’interface /v1 reste la même', async () => {
       const dossier = await mkdtemp(join(tmpdir(), 'web-'));
       await writeFile(join(dossier, 'index.html'), '<!doctype html><title>AviMaster</title>');
+      await mkdir(join(dossier, 'assets'));
+      await writeFile(join(dossier, 'assets', 'app-1234.js'), 'console.log(1)');
+      await writeFile(join(dossier, 'assets', 'app-1234.js.br'), brotliCompressSync('console.log(1)'));
       const b = await creerBanc({ dossierWeb: dossier });
       try {
         const page = await b.app.inject({ method: 'GET', url: '/' });
@@ -90,6 +94,11 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
         expect(page.headers['content-type']).toMatch(/text\/html/);
         expect(page.headers['cache-control']).toBe('no-cache');
         expect(page.body).toContain('AviMaster');
+        const compresse = await b.app.inject({ method: 'GET', url: '/assets/app-1234.js', headers: { 'accept-encoding': 'br, gzip' } });
+        expect(compresse.statusCode).toBe(200);
+        expect(compresse.headers['content-encoding']).toBe('br');
+        expect(compresse.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+        expect((await b.app.inject({ method: 'GET', url: '/assets/app-1234.js' })).body).toBe('console.log(1)');
         expect((await b.app.inject({ method: 'GET', url: '/v1/sante' })).json()).toEqual({ ok: true });
         expect((await b.app.inject({ method: 'GET', url: '/v1/inconnu' })).json()).toEqual({ erreur: 'Adresse inconnue.' });
         // Rien hors du dossier de l'application ne doit sortir, même avec des chemins détournés.

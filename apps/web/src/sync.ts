@@ -184,7 +184,9 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       let recus = 0;
       let ecartes = 0;
       let refuses = 0;
-      let connus = [...c.droits].sort().join(',');
+      const empreinteDroits = (droits: string[], zones: string[]) => `${[...droits].sort().join(',')}|${[...zones].sort().join(',')}`;
+      let connus = empreinteDroits(c.droits, c.zones ?? []);
+      let repartir = false;
       for (const lot of lots) {
         let envoi = lot;
         let rep: ReponseSync;
@@ -196,12 +198,12 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
           ecartes += rep.ecartes;
           refuses += rep.refuses ?? 0;
           seq = rep.seq;
-          // Si l'administrateur a changé les droits, ce que le serveur renvoie change : on repart du début pour récupérer ce qui devient visible.
-          const nouveaux = rep.moi ? [...rep.moi.droits].sort().join(',') : connus;
+          // L'administrateur a changé les droits ou les bâtiments : ce que la personne peut voir change. Une fois tout envoyé, on efface
+          // la copie locale et on reprend tout depuis le début (ce qui n'est plus permis disparaît du téléphone, ce qui le devient arrive).
+          const nouveaux = rep.moi ? empreinteDroits(rep.moi.droits, rep.moi.zones) : connus;
           if (nouveaux !== connus) {
             connus = nouveaux;
-            seq = 0;
-            rep = { ...rep, reste: true };
+            repartir = true;
           }
           await base.connexion.where('cle').equals('serveur').modify((ligne) => {
             ligne.derniereSeq = seq;
@@ -213,6 +215,19 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
               else delete ligne.fonction;
             }
           });
+        } while (rep.reste);
+      }
+      if (repartir) {
+        // Ce qui a été saisi pendant cet échange n'est pas encore parti : on le garde.
+        await base.transaction('rw', TABLES_SYNCHRONISEES.map((t) => base.table(t)), async () => {
+          for (const t of TABLES_SYNCHRONISEES) await base.table<EnregistrementSync, string>(t).filter((r) => r.misAJour < debut).delete();
+        });
+        seq = 0;
+        let rep: ReponseSync;
+        do {
+          rep = await appeler<ReponseSync>(c.url, chemin, { jeton: c.jeton, corps: { depuisSeq: seq, changements: [] } satisfies DemandeSync });
+          recus += await appliquer(rep.changements);
+          seq = rep.seq;
         } while (rep.reste);
       }
       // Mise à jour ciblée : le nom de l'élevage ou le rôle ont pu changer pendant l'échange.
@@ -293,6 +308,8 @@ export function creerSynchro(base: BaseElevage = db, f: Fetch = (...a) => fetch(
       const r = await appeler<{ jeton: string; doitChanger: boolean }>(c.url, '/v1/auth/connexion', { corps: { identifiant: c.identifiant, motDePasse, appareil: nomAppareil() } });
       if (r.doitChanger) return 'provisoire';
       await base.connexion.update('serveur', { jeton: r.jeton });
+      // L'ancienne session ne sert plus : on la ferme sur le serveur (sans attendre, elle a souvent déjà expiré).
+      void appeler(c.url, '/v1/auth/deconnexion', { jeton: c.jeton, methode: 'POST' }).catch(() => undefined);
       return 'ok';
     },
 

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { LIBELLES_CATEGORIES, LIBELLES_MODES, MODES_PAIEMENT, aDroit, jourLocal, normaliserTelephone, peutValiderDepense, reglement, totalLignes, type ModePaiement, type OperationFinanciere, type Paiement } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { profilDe } from '../droits';
 import { ErreurSaisie, repo } from '../repo';
@@ -67,7 +67,7 @@ export function PageOperation({ elevage, id }: { elevage: Elevage; id: string })
   const enregistrer = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const a = await repo.ajouterPaiement(op.id, versNombre(montant || String(reste)), mode, date, !recette && !peutValiderPaiement);
+      const a = await repo.ajouterPaiement(op.id, versEntier(montant || String(reste)), mode, date, !recette && !peutValiderPaiement);
       notifier(recette ? 'Encaissement noté ✓' : 'Paiement noté ✓', { annuler: () => repo.annuler(a) });
       setMontant('');
       setErreur(null);

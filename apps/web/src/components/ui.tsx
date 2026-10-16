@@ -5,6 +5,7 @@ import { repo } from '../repo';
 import { aDesTuilesDeSaisie, aLeModule } from '../droits';
 import { useRoute } from '../route';
 import type { Elevage } from '../useElevage';
+import { versEntier, versNombre } from '../format';
 
 /* ---------- Notifications avec « Annuler » ---------- */
 interface Notif {
@@ -88,7 +89,7 @@ export function Champ({ libelle, children, aide }: { libelle: string; children: 
 export function Nombre({ valeur, onChange, min = 0, pas = 1, unite, id }: { valeur: string; onChange: (v: string) => void; min?: number; pas?: number; unite?: string; id?: string }) {
   const decimales = pas < 1 ? 1 : 0;
   const bouger = (delta: number) => {
-    const actuel = parseFloat(valeur.replace(',', '.'));
+    const actuel = pas < 1 ? versNombre(valeur) : versEntier(valeur);
     const suivant = Math.max(min, (Number.isFinite(actuel) ? actuel : 0) + delta);
     onChange(String(Number(suivant.toFixed(decimales))));
   };
@@ -102,7 +103,7 @@ export function Nombre({ valeur, onChange, min = 0, pas = 1, unite, id }: { vale
   );
 }
 
-export const versNombre = (s: string): number => parseFloat(s.replace(',', '.'));
+export { versEntier, versNombre };
 
 /* ---------- Alertes ---------- */
 export function Badge({ niveau }: { niveau: Niveau | 'vert' }) {

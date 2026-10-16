@@ -36,6 +36,8 @@ export interface Elevage {
   donnees: DonneesElevage;
   /** Dépenses et recettes saisies (hors achats d'aliment du stock). */
   operations: OperationFinanciere[];
+  /** Les mêmes, annulées comprises : un numéro de facture annulée ne se réutilise pas. */
+  toutesOperations: OperationFinanciere[];
   /** Règlements enregistrés (acomptes, soldes), clients et fournisseurs, employés. */
   paiements: Paiement[];
   tiers: Tiers[];
@@ -83,9 +85,13 @@ export function niveauGlobal(alertes: AlerteEtat[]): Niveau | 'vert' {
 /** Toutes les données de l'élevage, tenues à jour en direct. `null` pendant le chargement. */
 export function useElevage(): Elevage | null {
   const [maintenant, setMaintenant] = useState(() => new Date());
+  // Tout l'élevage est recalculé quand l'heure avance : toutes les 5 minutes suffisent (alertes, étapes du jour), et au retour dans l'application.
   useEffect(() => {
-    const t = setInterval(() => setMaintenant(new Date()), 60_000);
-    return () => clearInterval(t);
+    const avancer = () => setMaintenant(new Date());
+    const t = setInterval(avancer, 5 * 60_000);
+    const auRetour = () => { if (document.visibilityState === 'visible') avancer(); };
+    document.addEventListener('visibilitychange', auRetour);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', auRetour); };
   }, []);
 
   const lots = useLiveQuery(() => db.lots.toArray(), []);
@@ -133,13 +139,15 @@ export function useElevage(): Elevage | null {
     const donnees = filtrerParZones(completes, zones);
     const reglages = fusionnerReglages(Object.fromEntries(reglagesBruts.map((r) => [r.cle, r.valeur])));
     const alertes = appliquerEtats(evaluerAlertes({ ...donnees, maintenant, especes: reglages.especes, seuils: reglages.seuils, protocoles: reglages.protocoles }), etats, maintenant.getTime());
+    const index = <T extends { id: string; nom: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x.nom]));
+    const [nLots, nLogements, nIncubations, nQuarantaines] = [index(donnees.lots), index(donnees.logements), index(donnees.incubations), index(donnees.quarantaines)];
     const noms: Noms = {
-      lot: (id) => donnees.lots.find((l) => l.id === id)?.nom ?? 'Lot',
-      logement: (id) => donnees.logements.find((l) => l.id === id)?.nom ?? 'Local',
-      incubation: (id) => donnees.incubations.find((i) => i.id === id)?.nom ?? 'Incubation',
-      quarantaine: (id) => donnees.quarantaines.find((q) => q.id === id)?.nom ?? 'Quarantaine',
+      lot: (id) => (id && nLots.get(id)) || 'Lot',
+      logement: (id) => (id && nLogements.get(id)) || 'Local',
+      incubation: (id) => (id && nIncubations.get(id)) || 'Incubation',
+      quarantaine: (id) => (id && nQuarantaines.get(id)) || 'Quarantaine',
     };
-    return { donnees, operations: vivants(operations), paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), profil: vivants(profils).find((p) => p.id === 'elevage'),
+    return { donnees, operations: vivants(operations), toutesOperations: operations, paiements: vivants(paiements), tiers: vivants(tiers), employes: vivants(employes), profil: vivants(profils).find((p) => p.id === 'elevage'),
       politique: normaliserPolitique(vivants(profils).find((p) => p.id === 'elevage')?.securite),
       comptes: vivants(comptes), transferts: vivants(transferts), pointages: vivants(pointages),
       moi: connexion ? { droits: connexion.droits, zones: connexion.zones, role: connexion.role, relie: true, ...(connexion.fonction ? { fonction: connexion.fonction } : {}) } : { droits: TOUTES_LES_FONCTIONS, zones: [], role: 'proprietaire', relie: false }, reglages, effectifParLot: effectifs(donnees.mouvements), alertes, niveauGlobal: niveauGlobal(alertes), noms, maintenant };

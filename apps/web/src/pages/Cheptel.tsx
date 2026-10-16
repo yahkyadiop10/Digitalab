@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Si } from '../components/Si';
 import { ajouterJours, delaisEnCours, jourLocal, quarantainesEnCours, type Lot } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo, type Annulation } from '../repo';
 import { libelleEvenement } from './Sante';
 import { aller } from '../route';
@@ -45,7 +45,7 @@ export function NouveauLot({ elevage }: { elevage: Elevage }) {
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const id = await repo.creerLot({ nom, especeCode, race, ...(naissance ? { naissance } : {}), logementId: logementId || null, effectif: versNombre(effectif) });
+      const id = await repo.creerLot({ nom, especeCode, race, ...(naissance ? { naissance } : {}), logementId: logementId || null, effectif: versEntier(effectif) });
       notifier('Lot créé ✓');
       aller(`cheptel/${id}`);
     } catch (err) {
@@ -189,7 +189,7 @@ export function FicheLot({ elevage, lotId }: { elevage: Elevage; lotId: string }
             ) : (
               <div>
                 <Champ libelle="Nombre d’animaux comptés"><Nombre valeur={comptage} onChange={setComptage} /></Champ>
-                <button className="bouton" onClick={() => agir(async () => { await repo.corrigerEffectif(lot.id, versNombre(comptage)); setComptage(null); }, 'Effectif corrigé ✓')}>Corriger</button>
+                <button className="bouton" onClick={() => agir(async () => { await repo.corrigerEffectif(lot.id, versEntier(comptage)); setComptage(null); }, 'Effectif corrigé ✓')}>Corriger</button>
               </div>
             )}
             <div className="actions">

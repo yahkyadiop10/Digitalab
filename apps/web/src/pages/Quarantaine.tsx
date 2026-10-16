@@ -13,8 +13,13 @@ import {
   type EtatArrivee,
   type EtatNote,
   type Quarantaine,
+  LIBELLES_MODES,
+  MODES_PAIEMENT,
+  peutValiderDepense,
+  type ModePaiement,
 } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { peut, peutUn } from '../droits';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { ErreurSaisie, repo } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -89,6 +94,9 @@ export function FormArrivee({ elevage }: { elevage: Elevage }) {
   const [uniteAge, setUniteAge] = useState<'jours' | 'semaines' | 'mois'>('semaines');
   const [origine, setOrigine] = useState('');
   const [prix, setPrix] = useState('');
+  const [moyen, setMoyen] = useState<ModePaiement>('especes');
+  // Le prix devient une dépense : seul qui peut noter une dépense le voit.
+  const notePrix = peutUn(elevage, ['finances.saisir_depense', 'finances.valider_achat']);
   const [arrivee, setArrivee] = useState(auj);
   const [duree, setDuree] = useState(String(DUREE_QUARANTAINE_DEFAUT));
   const [logementId, setLogementId] = useState('');
@@ -100,7 +108,7 @@ export function FormArrivee({ elevage }: { elevage: Elevage }) {
   const nomAuto = `${reglages.especes[espece]?.nom ?? 'Arrivage'} – arrivée du ${new Date(`${arrivee}T12:00:00`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
   const jours = (): number | undefined => {
     if (!age.trim()) return undefined;
-    const v = versNombre(age);
+    const v = versEntier(age);
     return Number.isFinite(v) ? Math.round(v * { jours: 1, semaines: 7, mois: 30 }[uniteAge]) : NaN;
   };
 
@@ -109,9 +117,12 @@ export function FormArrivee({ elevage }: { elevage: Elevage }) {
     try {
       const ageJours = jours();
       const id = await repo.creerQuarantaine({
-        nom: nom.trim() || nomAuto, especeCode: espece, race, nombre: versNombre(nombre), ...(ageJours !== undefined ? { ageJours } : {}),
-        origine, arrivee, dureeJours: versNombre(duree), logementId: logementId || null, alimentation, etatArrivee: etat, noteArrivee: note,
-        ...(prix ? { prixTotal: versNombre(prix) } : {}),
+        nom: nom.trim() || nomAuto, especeCode: espece, race, nombre: versEntier(nombre), ...(ageJours !== undefined ? { ageJours } : {}),
+        origine, arrivee, dureeJours: versEntier(duree), logementId: logementId || null, alimentation, etatArrivee: etat, noteArrivee: note,
+        ...(notePrix && prix ? {
+          prixTotal: versEntier(prix), mode: moyen,
+          aValider: !peutValiderDepense(elevage.moi.droits, 'achat_animaux'), paiementAValider: !peut(elevage, 'finances.valider_paiement'),
+        } : {}),
       });
       notifier('Arrivée enregistrée, quarantaine commencée ✓');
       aller(`quarantaine/${id}`);
@@ -136,7 +147,12 @@ export function FormArrivee({ elevage }: { elevage: Elevage }) {
         {(['jours', 'semaines', 'mois'] as const).map((u) => <button key={u} type="button" className={uniteAge === u ? 'on' : ''} onClick={() => setUniteAge(u)}>{u}</button>)}
       </div>
       <Champ libelle="Vendeur ou provenance (facultatif)"><input value={origine} onChange={(e) => setOrigine(e.target.value)} placeholder="Nom du vendeur, marché, ferme…" /></Champ>
-      <Champ libelle="Prix payé en FCFA (facultatif)" aide="S’il est renseigné, la dépense est notée dans les finances (achat d’animaux)."><Nombre valeur={prix} onChange={setPrix} pas={500} unite="FCFA" /></Champ>
+      {notePrix && <Champ libelle="Prix payé en FCFA (facultatif)" aide="S’il est renseigné, la dépense est notée dans les finances (achat d’animaux)."><Nombre valeur={prix} onChange={setPrix} pas={500} unite="FCFA" /></Champ>}
+      {notePrix && prix && (
+        <Champ libelle="Payé avec" aide="L’argent sort du compte correspondant (caisse, Wave…).">
+          <select value={moyen} onChange={(e) => setMoyen(e.target.value as ModePaiement)}>{MODES_PAIEMENT.map((m) => <option key={m} value={m}>{LIBELLES_MODES[m]}</option>)}</select>
+        </Champ>
+      )}
       <Champ libelle="Date d’arrivée"><input type="date" value={arrivee} max={auj} onChange={(e) => setArrivee(e.target.value)} /></Champ>
       <Champ libelle="Durée de la quarantaine (jours)" aide="Valeur de départ à adapter : demandez conseil à un vétérinaire si vous hésitez."><Nombre valeur={duree} onChange={setDuree} min={1} pas={7} unite="j" /></Champ>
       <Champ libelle="Où les placer ?" aide="Par défaut, une zone de quarantaine est créée ou réutilisée.">
@@ -294,8 +310,8 @@ function FormNote({ quarantaine, derniereAlimentation, fin }: { quarantaine: Qua
     try {
       const a = await repo.ajouterNoteQuarantaine({
         quarantaineId: quarantaine.id, etat, comportements: choisis, alimentation, note,
-        ...(poids ? { poidsMoyenG: versNombre(poids) } : {}),
-        ...(malades ? { malades: versNombre(malades) } : {}),
+        ...(poids ? { poidsMoyenG: versEntier(poids) } : {}),
+        ...(malades ? { malades: versEntier(malades) } : {}),
       });
       notifier('Note ajoutée ✓', { annuler: () => repo.annuler(a) });
       fin();

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { CATEGORIES_PAIE, LIBELLES_MODES, MODES_PAIEMENT, jourLocal, moisDecale, suiviSalaires, type ModePaiement, type NatureSalaire, type OperationFinanciere } from '@digitalab/core';
 import { Si } from '../components/Si';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { dateCourte, formatMontant } from '../format';
 import { ErreurSaisie, repo } from '../repo';
 import { profilDe } from '../droits';
@@ -18,7 +18,6 @@ export function PageSalaires({ elevage, moisInitial }: { elevage: Elevage; moisI
   const [mois, setMois] = useState(moisInitial && /^\d{4}-\d{2}$/.test(moisInitial) ? moisInitial : moisCourant);
   const suivi = suiviSalaires(employes, operations, mois);
   const masse = suivi.reduce((a, s) => a + s.verse + s.primes, 0);
-  const totalDu = suivi.reduce((a, s) => a + s.du, 0);
 
   return (
     <>
@@ -36,7 +35,7 @@ export function PageSalaires({ elevage, moisInitial }: { elevage: Elevage; moisI
       {suivi.length > 0 && (
         <div className="tuiles">
           <div className="tuile"><b className="montant">{formatMontant(masse)}</b><span>versé ce mois-ci</span></div>
-          <div className="tuile"><b className="montant">{formatMontant(Math.max(0, totalDu - suivi.reduce((a, s) => a + s.verse, 0)))}</b><span>reste à verser</span></div>
+          <div className="tuile"><b className="montant">{formatMontant(suivi.reduce((a, s) => a + s.reste, 0))}</b><span>reste à verser</span></div>
         </div>
       )}
       {suivi.map((s) => (
@@ -80,7 +79,7 @@ export function FormEmploye({ elevage, id }: { elevage: Elevage; id?: string }) 
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await repo.enregistrerEmploye({ ...(id ? { id } : {}), nom, poste, salaire: versNombre(salaire), telephone, debut, fin });
+      await repo.enregistrerEmploye({ ...(id ? { id } : {}), nom, poste, salaire: versEntier(salaire), telephone, debut, fin });
       notifier('Employé enregistré ✓');
       aller('finances/salaires');
     } catch (err) {
@@ -123,7 +122,7 @@ export function FormPaie({ elevage, employeId, periode, nature }: { elevage: Ele
   const soumettre = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const a = await repo.payerSalaire({ employeId, periode, montant: versNombre(montant), nature, mode, date, note });
+      const a = await repo.payerSalaire({ employeId, periode, montant: versEntier(montant), nature, mode, date, note });
       notifier(`${CATEGORIES_PAIE[nature]} noté ✓`, { annuler: () => repo.annuler(a) });
       aller(`finances/salaires?mois=${periode}`);
     } catch (err) {

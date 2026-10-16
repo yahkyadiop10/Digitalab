@@ -88,9 +88,13 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       prefix: '/',
       wildcard: false,
       cacheControl: false,
+      // Versions compressées préparées à la construction (.br, .gz) : environ trois fois moins à télécharger en 3G.
+      preCompressed: true,
       setHeaders: (res, chemin) => {
-        // La page et le service hors ligne doivent être relus à chaque fois pour recevoir les mises à jour ; les autres fichiers ont un nom qui change avec leur contenu.
-        if (/(index\.html|sw\.js|manifest\.webmanifest)$/.test(chemin)) res.header('cache-control', 'no-cache');
+        // La page et le service hors ligne doivent être relus à chaque fois pour recevoir les mises à jour ; les fichiers de assets/ ont un nom
+        // qui change avec leur contenu : le téléphone peut les garder.
+        if (/(index\.html|sw\.js|manifest\.webmanifest)(\.br|\.gz)?$/.test(chemin)) res.header('cache-control', 'no-cache');
+        else if (/[\\/]assets[\\/]/.test(chemin)) res.header('cache-control', 'public, max-age=31536000, immutable');
       },
     });
   }

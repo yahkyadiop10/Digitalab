@@ -16,7 +16,7 @@ import {
   type ProtocoleVaccin,
   type ResultatTraitement,
 } from '@digitalab/core';
-import { Champ, Nombre, Retour, useNotifier, versNombre, useConfirmer } from '../components/ui';
+import { Champ, Nombre, Retour, useNotifier, versEntier, useConfirmer } from '../components/ui';
 import { ErreurSaisie, nouvelId, repo, type Annulation } from '../repo';
 import { aller } from '../route';
 import type { Elevage } from '../useElevage';
@@ -255,7 +255,7 @@ export function FormTraitement({ elevage, lotInitial, maladieInitiale }: { eleva
   if (lots.length === 0) return (<><Retour vers="sante" /><div className="carte">Aucun lot avec des animaux.</div></>);
 
   return (
-    <form onSubmit={(e: FormEvent) => { e.preventDefault(); void envoyer(() => repo.ajouterTraitement({ lotId, nom, dose, voie, dureeJours: versNombre(duree), delaiAttenteJours: versNombre(delai || '0'), ...(maladieInitiale ? { maladie: maladieInitiale } : {}), note }), 'Traitement noté ✓'); }}>
+    <form onSubmit={(e: FormEvent) => { e.preventDefault(); void envoyer(() => repo.ajouterTraitement({ lotId, nom, dose, voie, dureeJours: versEntier(duree), delaiAttenteJours: versEntier(delai || '0'), ...(maladieInitiale ? { maladie: maladieInitiale } : {}), note }), 'Traitement noté ✓'); }}>
       <Retour vers="sante" />
       <h2>Traitement ou remède</h2>
       {maladieInitiale && <p className="muet">Pour : {maladiePar(maladieInitiale)?.nom}</p>}
@@ -297,7 +297,7 @@ export function FormQuarantaine({ elevage, lotInitial }: { elevage: Elevage; lot
   const { erreur, envoyer } = useEnvoi();
   if (lots.length === 0) return (<><Retour vers="sante" /><div className="carte">Aucun lot avec des animaux.</div></>);
   return (
-    <form onSubmit={(e: FormEvent) => { e.preventDefault(); void envoyer(() => repo.ajouterQuarantaine({ lotId, dureeJours: versNombre(duree), note }), 'Quarantaine notée ✓'); }}>
+    <form onSubmit={(e: FormEvent) => { e.preventDefault(); void envoyer(() => repo.ajouterQuarantaine({ lotId, dureeJours: versEntier(duree), note }), 'Quarantaine notée ✓'); }}>
       <Retour vers="sante" />
       <h2>Quarantaine</h2>
       <p className="muet">Gardez le lot à l’écart des autres, avec son propre matériel, le temps de l’observer.</p>
@@ -374,7 +374,7 @@ function FormProtocole({ initial, especes, onSave, onCancel, onDelete }: { initi
   const [especeCode, setEspeceCode] = useState(initial?.especeCode ?? 'poule');
   const [age, setAge] = useState(String(initial?.ageJours ?? 7));
   const [repete, setRepete] = useState(initial?.repeterTousLesJours ? String(initial.repeterTousLesJours) : '');
-  const valide = nom.trim() && Number.isInteger(versNombre(age)) && versNombre(age) >= 0;
+  const valide = nom.trim() && Number.isInteger(versEntier(age)) && versEntier(age) >= 0;
   return (
     <div className="carte">
       <Champ libelle="Nom du vaccin"><input value={nom} onChange={(e) => setNom(e.target.value)} /></Champ>
@@ -384,7 +384,7 @@ function FormProtocole({ initial, especes, onSave, onCancel, onDelete }: { initi
       <Champ libelle="Âge à la première dose (jours)"><Nombre valeur={age} onChange={setAge} unite="j" /></Champ>
       <Champ libelle="Rappel tous les (jours, facultatif)"><Nombre valeur={repete} onChange={setRepete} pas={30} unite="j" /></Champ>
       <div className="rangee">
-        <button className="bouton court" disabled={!valide} onClick={() => onSave({ id: initial?.id ?? nouvelId(), nom: nom.trim(), especeCode, ageJours: versNombre(age), repeterTousLesJours: repete && versNombre(repete) > 0 ? versNombre(repete) : null })}>Enregistrer</button>
+        <button className="bouton court" disabled={!valide} onClick={() => onSave({ id: initial?.id ?? nouvelId(), nom: nom.trim(), especeCode, ageJours: versEntier(age), repeterTousLesJours: repete && versEntier(repete) > 0 ? versEntier(repete) : null })}>Enregistrer</button>
         <button className="bouton alt court" onClick={onCancel}>Fermer</button>
         {onDelete && <button className="lien danger" onClick={onDelete}>Supprimer</button>}
       </div>
