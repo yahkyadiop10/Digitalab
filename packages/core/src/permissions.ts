@@ -238,7 +238,8 @@ export const REGLES_TABLES: Record<TableSynchronisee, Regle> = {
     ecriture: ['finances.encaisser', 'finances.payer', 'finances.saisir_depense', 'finances.saisir_facture', 'finances.valider_paiement', 'salaires.payer'],
     annulation: ['finances.annuler_depense', 'finances.annuler_vente'],
   },
-  tiers: { lecture: [...module('finances'), 'cheptel.voir'], ecriture: ['finances.carnet', 'finances.saisir_depense', 'finances.saisir_facture', 'finances.encaisser'], annulation: ['finances.carnet'] },
+  // Le carnet contient les téléphones des clients et fournisseurs : il reste aux finances.
+  tiers: { lecture: module('finances'), ecriture: ['finances.carnet', 'finances.saisir_depense', 'finances.saisir_facture', 'finances.encaisser'], annulation: ['finances.carnet'] },
   employes: { lecture: module('salaires'), ecriture: ['salaires.gerer'], annulation: ['salaires.gerer'] },
   quarantaines: { lecture: module('quarantaine'), ecriture: ['quarantaine.arrivee', 'quarantaine.controles', 'quarantaine.decision'], annulation: ['quarantaine.annuler', 'quarantaine.decision'] },
   notesQuarantaine: { lecture: module('quarantaine'), ecriture: ['quarantaine.notes'], annulation: ['quarantaine.annuler'] },

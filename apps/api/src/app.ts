@@ -3,13 +3,14 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import {
   BLOCAGE_CONNEXION_MINUTES, ESSAIS_CONNEXION_MAX, LIBELLES_PROFILS, MOT_DE_PASSE_PROVISOIRE_JOURS, PROFILS_ASSIGNABLES, TABLES_SYNCHRONISEES,
-  aDroit, decrireEnregistrement, determinerAction, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, identifiantDepuisNom, identifiantLibre, nettoyerDroits,
+  aDroit, champsFigesModifies, decrireEnregistrement, determinerAction, problemeForme, aUnDroit, droitsDuProfil, droitsEffectifs, fonctionsDuModule, identifiantDepuisNom, identifiantLibre, nettoyerDroits,
   normaliserIdentifiant, normaliserTelephone, peutAnnuler, peutEcrireTable, peutLireTable, peutValiderDepense, problemeIdentifiant, problemeMotDePasse, tablesEcrivables,
   type ActionJournal, type ChangementSync, type DemandeSync, type DroitsMembre, type EntreeJournal, type ReponseSync, type RoleMembre, type TableSynchronisee,
 } from '@digitalab/core';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Config } from './config.js';
 import { transaction, type Pool } from './db.js';
+import { SQL_OUBLIER_TOUS_LES_ECHECS } from './installation.js';
 import { empreinteJeton, genererJeton, genererMotDePasseProvisoire, hacherMotDePasse, verifierMotDePasse } from './securite.js';
 
 export interface Dependances {
@@ -44,7 +45,11 @@ class ErreurHttp extends Error {
 }
 
 const LIMITE_REPONSE_SYNC = 1000;
-const TAILLE_MAX_ENREGISTREMENT = 50_000;
+/** Taille maximale d'une fiche : quelques kilo-octets suffisent ; la fiche de l'élevage contient le logo. */
+const TAILLE_MAX_ENREGISTREMENT = 16_000;
+const TAILLE_MAX_PROFIL = 50_000;
+/** Une fiche ne peut pas venir du futur : au-delà de cet écart avec l'horloge du serveur, elle est refusée (sinon elle deviendrait impossible à corriger). */
+const DERIVE_HORLOGE_MAX_MS = 86_400_000;
 const MESSAGE_IDENTIFIANTS = 'Identifiant ou mot de passe incorrect.';
 const JOUR_MS = 86_400_000;
 
@@ -189,6 +194,12 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
 
   const BLOCAGE_MAX_MS = JOUR_MS;
 
+  /**
+   * Les échecs sont comptés par identifiant ET par adresse : quelqu'un qui se trompe exprès sur le compte « admin » bloque son propre
+   * téléphone, pas celui du propriétaire. (L'adresse est celle de la connexion, impossible à falsifier hors d'un relais déclaré.)
+   */
+  const cleEssais = (identifiant: string, ip: string) => `${identifiant}|${ip}`;
+
   const messageBlocage = (jusqua: Date) => {
     const minutes = Math.max(1, Math.ceil((jusqua.getTime() - maintenant().getTime()) / 60_000));
     const texte = minutes >= 120 ? `${Math.round(minutes / 60)} heures` : `${minutes} minute${minutes > 1 ? 's' : ''}`;
@@ -198,12 +209,16 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   async function bloquer(cle: string): Promise<Date> {
     const now = maintenant();
     const r = await pool.query<{ verrouille_jusqua: Date }>(
+      // Une rafale d'essais simultanés ne compte que pour un seul blocage : on ne bloque pas un identifiant déjà bloqué.
       `UPDATE echecs_connexion SET essais = 0, blocages = blocages + 1,
          verrouille_jusqua = $2::timestamptz + LEAST($3::bigint, $4::bigint * power(2, LEAST(blocages, 10))::bigint) * interval '1 millisecond'
-       WHERE cle = $1 RETURNING verrouille_jusqua`,
+       WHERE cle = $1 AND (verrouille_jusqua IS NULL OR verrouille_jusqua <= $2)
+       RETURNING verrouille_jusqua`,
       [cle, now, BLOCAGE_MAX_MS, BLOCAGE_CONNEXION_MINUTES * 60_000],
     );
-    return r.rows[0]?.verrouille_jusqua ?? new Date(now.getTime() + BLOCAGE_CONNEXION_MINUTES * 60_000);
+    if (r.rows[0]) return r.rows[0].verrouille_jusqua;
+    const deja = (await pool.query<{ verrouille_jusqua: Date | null }>('SELECT verrouille_jusqua FROM echecs_connexion WHERE cle = $1', [cle])).rows[0]?.verrouille_jusqua;
+    return deja ?? new Date(now.getTime() + BLOCAGE_CONNEXION_MINUTES * 60_000);
   }
 
   /** Compte l'essai qui commence ; refuse tout de suite si l'identifiant est bloqué ou si la limite est déjà atteinte. */
@@ -267,20 +282,21 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   }, async (req) => {
     const b = req.body as { identifiant: string; motDePasse: string; appareil?: string };
     const identifiant = normaliserIdentifiant(b.identifiant);
-    await reserverEssai(identifiant);
+    const cle = cleEssais(identifiant, req.ip);
+    await reserverEssai(cle);
     const ligne = (await pool.query<{ id: string; nom: string | null; telephone: string | null; mot_de_passe_hash: string | null; doit_changer: boolean; mot_de_passe_expire: Date | null }>(
       'SELECT id, nom, telephone, mot_de_passe_hash, doit_changer, mot_de_passe_expire FROM utilisateurs WHERE identifiant = $1', [identifiant],
     )).rows[0];
     const empreinte = ligne?.mot_de_passe_hash ?? (await fausseEmpreinte());
     const bon = await motDePasseJuste(b.motDePasse, empreinte, ligne?.doit_changer === true);
     if (!ligne || !ligne.mot_de_passe_hash || !bon) {
-      await noterEchec(identifiant);
+      await noterEchec(cle);
       throw new ErreurHttp(401, MESSAGE_IDENTIFIANTS);
     }
     if (ligne.doit_changer && ligne.mot_de_passe_expire && ligne.mot_de_passe_expire <= maintenant()) {
       throw new ErreurHttp(403, 'Ce mot de passe provisoire a expiré. Demandez-en un nouveau à votre administrateur.', 'provisoire_expire');
     }
-    await oublierEchecs(identifiant);
+    await oublierEchecs(cle);
     const jeton = await ouvrirSession(pool, ligne.id, b.appareil);
     await pool.query('UPDATE utilisateurs SET derniere_connexion = $2 WHERE id = $1', [ligne.id, maintenant()]);
     return {
@@ -326,10 +342,11 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     if (u.doitChanger && u.motDePasseExpire && u.motDePasseExpire <= maintenant()) {
       throw new ErreurHttp(403, 'Ce mot de passe provisoire a expiré. Demandez-en un nouveau à votre administrateur.', 'provisoire_expire');
     }
-    await reserverEssai(u.identifiant);
+    const cle = cleEssais(u.identifiant, req.ip);
+    await reserverEssai(cle);
     const ligne = (await pool.query<{ mot_de_passe_hash: string }>('SELECT mot_de_passe_hash FROM utilisateurs WHERE id = $1', [u.id])).rows[0];
     if (!ligne || !(await motDePasseJuste(b.ancien, ligne.mot_de_passe_hash, u.doitChanger))) {
-      await noterEchec(u.identifiant);
+      await noterEchec(cle);
       throw new ErreurHttp(400, 'Le mot de passe actuel est incorrect.');
     }
     const probleme = problemeMotDePasse(b.nouveau, u.identifiant);
@@ -342,7 +359,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       await c.query('DELETE FROM sessions WHERE utilisateur_id = $1 AND jeton_hash <> $2', [u.id, empreinteJeton(jeton)]);
       await journaliserCompte(c, u, u.doitChanger ? 'a choisi son mot de passe personnel' : 'a changé son mot de passe');
     });
-    await oublierEchecs(u.identifiant);
+    await oublierEchecs(cle);
     return { ok: true };
   });
 
@@ -553,7 +570,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     await transaction(pool, async (c) => {
       await c.query('UPDATE utilisateurs SET mot_de_passe_hash = $2, doit_changer = true, mot_de_passe_expire = $3 WHERE id = $1', [cible.utilisateur_id, empreinte, expire]);
       await c.query('DELETE FROM sessions WHERE utilisateur_id = $1', [cible.utilisateur_id]);
-      await c.query('DELETE FROM echecs_connexion WHERE cle = $1', [cible.identifiant]);
+      await c.query(SQL_OUBLIER_TOUS_LES_ECHECS, [cible.identifiant]);
     });
     await journaliser(pool, id, await acteurDe(id, u), 'utilisateur', 'utilisateurs', cible.identifiant, `a réinitialisé le mot de passe de ${cible.nom ?? cible.identifiant}`, maintenant().getTime());
     return { ok: true, identifiant: cible.identifiant, nom: cible.nom, motDePasseProvisoire, expireLe: expire.toISOString() };
@@ -602,7 +619,8 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
   }, async (req) => {
     const u = await authentifier(req);
     const { id } = req.params as { id: string };
-    await exigerDroit(id, u.id, 'admin.journal', 'Vous n’avez pas le droit de consulter le journal d’activité.');
+    const lecteur = await exigerDroit(id, u.id, 'admin.journal', 'Vous n’avez pas le droit de consulter le journal d’activité.');
+    const masquerMontants = !voitLesFinances(lecteur.droits);
     const q = req.query as { avant?: number; limite?: number; identifiant?: string; table?: string };
     const limite = q.limite ?? 50;
     const qui = q.identifiant ? normaliserIdentifiant(q.identifiant) : null;
@@ -614,7 +632,9 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
     );
     const lignes = r.rows.slice(0, limite);
     const entrees: EntreeJournal[] = lignes.map((x) => ({
-      id: Number(x.id), faitLe: Number(x.fait_le), recuLe: x.recu_le.toISOString(), identifiant: x.identifiant, nom: x.nom, fonction: x.fonction, action: x.action, table: x.table_nom, enregistrementId: x.enregistrement_id, description: x.description,
+      id: Number(x.id), faitLe: Number(x.fait_le), recuLe: x.recu_le.toISOString(), identifiant: x.identifiant, nom: x.nom, fonction: x.fonction, action: x.action, table: x.table_nom, enregistrementId: x.enregistrement_id,
+      // Sans droit sur les finances, on sait qui a fait quoi, mais pas les montants.
+      description: masquerMontants && TABLES_ARGENT.has(x.table_nom) ? '' : x.description,
     }));
     return { entrees, reste: r.rows.length > limite };
   });
@@ -631,6 +651,16 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       },
     },
   } as const;
+
+  /** Voit l'argent de l'élevage : finances ou trésorerie. Les autres ne reçoivent ni les prix d'achat du stock, ni les montants du journal. */
+  const voitLesFinances = (droits: string[]) => aUnDroit(droits, [...fonctionsDuModule('finances'), ...fonctionsDuModule('tresorerie')]);
+  const CHAMPS_PRIX_STOCK = ['prixTotal', 'mode'] as const;
+  const sansPrix = (d: ChangementSync['enregistrement']): ChangementSync['enregistrement'] => {
+    const copie = { ...d };
+    for (const champ of CHAMPS_PRIX_STOCK) delete copie[champ];
+    return copie;
+  };
+  const TABLES_ARGENT = new Set(['operations', 'paiements', 'transferts', 'pointages', 'comptes', 'employes', 'entreesStock']);
 
   /**
    * Conditions SQL (déjà vérifiées, jamais issues de la saisie) pour ne renvoyer que ce que les droits et les bâtiments réservés permettent de lire.
@@ -680,10 +710,11 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       throw new ErreurHttp(403, 'Vos droits permettent seulement de consulter les données de cet élevage.');
     }
     for (const ch of demande.changements) {
-      if (JSON.stringify(ch.enregistrement).length > TAILLE_MAX_ENREGISTREMENT) throw new ErreurHttp(400, 'Un enregistrement est trop volumineux.');
+      if (JSON.stringify(ch.enregistrement).length > (ch.table === 'profil' ? TAILLE_MAX_PROFIL : TAILLE_MAX_ENREGISTREMENT)) throw new ErreurHttp(400, 'Un enregistrement est trop volumineux.');
     }
     const lecture = conditionsLecture(moi.droits, moi.zones);
     const acteur = await acteurDe(id, u);
+    const voitPrix = voitLesFinances(moi.droits);
 
     return transaction(pool, async (c) => {
       // Une seule synchronisation à la fois par élevage : l'ordre des numéros de séquence reste celui de validation.
@@ -696,6 +727,13 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       for (const ch of demande.changements as ChangementSync[]) {
         const e = ch.enregistrement;
         const existant = await donneeDe(ch.table, e.id);
+        // Le prix d'un achat de stock n'est pas envoyé à qui ne voit pas les finances : quand il renvoie la fiche (pour l'annuler), on garde le prix enregistré.
+        if (ch.table === 'entreesStock' && existant && !voitPrix) {
+          for (const champ of CHAMPS_PRIX_STOCK) {
+            if (champ in existant) e[champ] = existant[champ];
+            else delete e[champ];
+          }
+        }
         if (!(await autorise(ch, existant))) {
           refuses += 1;
           continue;
@@ -742,29 +780,53 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
         }
       }
 
+      /** La fiche désigne-t-elle un employé réellement enregistré ? (Sinon un faux « salaire » permettrait de valider n'importe quelle dépense.) */
+      async function salaireReel(op: Record<string, unknown> | undefined): Promise<boolean> {
+        if (!op || typeof op['employeId'] !== 'string') return false;
+        const employe = await donneeDe('employes', op['employeId']);
+        return !!employe && !employe['supprimeLe'];
+      }
+
       /** Cette personne a-t-elle le droit de faire cette modification ? */
       async function autorise(ch: ChangementSync, existant: Record<string, unknown> | undefined): Promise<boolean> {
         const e = ch.enregistrement;
         if (!peutEcrireTable(moi.droits, ch.table)) return false;
-        if (moi.zones.length > 0 && !(await dansLesZones(ch, existant))) return false;
-        if (e.supprimeLe) {
-          let sens = e['sens'];
-          if (ch.table === 'paiements' && typeof e['operationId'] === 'string') sens = (await donneeDe('operations', e['operationId']))?.['sens'];
+        // Une heure de modification venue du futur rendrait la fiche impossible à corriger et fausserait le journal.
+        if (e.misAJour > maintenant().getTime() + DERIVE_HORLOGE_MAX_MS) return false;
+        if (problemeForme(ch.table, e)) return false;
+        // Bâtiments réservés : la nouvelle version ET la fiche existante doivent être dans les bâtiments de la personne.
+        if (moi.zones.length > 0) {
+          if (!(await dansLesZones(ch, existant))) return false;
+          if (existant && !(await dansLesZones({ table: ch.table, enregistrement: existant as ChangementSync['enregistrement'] }, undefined))) return false;
+        }
+        // Une fiche enregistrée ne se réécrit pas : on ne change que ce qui est prévu (validation, résultat d'un soin…), le reste s'annule et se refait.
+        if (existant && champsFigesModifies(ch.table, existant, e).length > 0) return false;
+        // Annuler ou rétablir demande le droit d'annuler, d'après la fiche enregistrée (pas d'après ce que l'appareil prétend).
+        const annule = !!e.supprimeLe && !existant?.['supprimeLe'];
+        const retablit = !!existant?.['supprimeLe'] && !e.supprimeLe;
+        if (annule || retablit) {
+          const reference = existant ?? e;
+          let sens = reference['sens'];
+          if (ch.table === 'paiements' && typeof reference['operationId'] === 'string') sens = (await donneeDe('operations', reference['operationId']))?.['sens'];
           if (!peutAnnuler(moi.droits, ch.table, { sens })) return false;
         }
         // Validation : seul un responsable peut passer une dépense ou un paiement à « validé ».
         if (ch.table === 'operations' && e['sens'] === 'depense') {
           const devientValide = e['statut'] !== 'a_valider' && (existant ? existant['statut'] === 'a_valider' : true);
-          const salaire = typeof e['employeId'] === 'string';
-          const droitSalaire = salaire && aDroit(moi.droits, 'salaires.payer');
+          const droitSalaire = aDroit(moi.droits, 'salaires.payer') && (await salaireReel(e));
           if (devientValide && !droitSalaire && !peutValiderDepense(moi.droits, String(e['categorie'] ?? ''))) return false;
         }
         if (ch.table === 'paiements') {
           const op = typeof e['operationId'] === 'string' ? await donneeDe('operations', e['operationId']) : undefined;
           const devientValide = e['statut'] !== 'a_valider' && (existant ? existant['statut'] === 'a_valider' : true);
-          if (op?.['sens'] === 'depense' && devientValide && !aUnDroit(moi.droits, ['finances.valider_paiement', 'salaires.payer'])) return false;
+          if (op?.['sens'] === 'depense' && devientValide) {
+            const droitSalaire = aDroit(moi.droits, 'salaires.payer') && (await salaireReel(op));
+            if (!droitSalaire && !aDroit(moi.droits, 'finances.valider_paiement')) return false;
+          }
           if (op?.['sens'] === 'recette' && !aUnDroit(moi.droits, ['finances.encaisser', 'finances.saisir_facture', 'finances.valider_paiement'])) return false;
         }
+        // Un achat de stock payé fait sortir de l'argent d'un compte : il demande le même droit qu'une dépense d'achat validée.
+        if (ch.table === 'entreesStock' && !existant && typeof e['prixTotal'] === 'number' && e['prixTotal'] > 0 && !peutValiderDepense(moi.droits, 'aliment')) return false;
         return true;
       }
 
@@ -783,7 +845,7 @@ export async function creerApp(dep: Dependances): Promise<FastifyInstance> {
       const dernier = gardees.at(-1);
       return {
         seq: dernier ? Number(dernier.seq) : demande.depuisSeq,
-        changements: gardees.map((l) => ({ table: l.table_nom, enregistrement: l.donnees })),
+        changements: gardees.map((l) => ({ table: l.table_nom, enregistrement: l.table_nom === 'entreesStock' && !voitPrix ? sansPrix(l.donnees) : l.donnees })),
         reste,
         ecartes,
         refuses,

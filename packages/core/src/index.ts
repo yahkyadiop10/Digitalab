@@ -16,3 +16,4 @@ export * from './tableau';
 export * from './tresorerie';
 export * from './types';
 export * from './zones';
+export * from './controles';

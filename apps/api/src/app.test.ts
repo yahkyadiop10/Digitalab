@@ -824,6 +824,133 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
     });
   });
 
+  describe('fiches protégées contre la réécriture (contrôles du serveur)', () => {
+    const refuses = async (s: Session, org: string, ...c: ChangementSync[]) => ((await sync(s, 0, c, org)).json() as ReponseSync).refuses;
+
+    it('une recette ne devient pas une dépense validée, et un règlement ne change pas de facture', async () => {
+      const patron = await seConnecter(banc, '77 800 00 01');
+      const o = patron.organisationId;
+      await sync(patron, 0, [enreg('operations', 'dep-vraie', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 10000 })]);
+      await inviter(patron, { telephone: '77 800 00 02', role: 'caissier' });
+      const caissier = await seConnecter(banc, '77 800 00 02');
+      expect(await refuses(caissier, o, enreg('operations', 'fraude1', MAINTENANT + 1, { sens: 'recette', categorie: 'oeufs', montant: 1000 }))).toBe(0);
+      expect(await refuses(caissier, o, enreg('operations', 'fraude1', MAINTENANT + 2, { sens: 'depense', categorie: 'soins', montant: 500000 }))).toBe(1);
+      expect(await refuses(caissier, o, enreg('paiements', 'pf2', MAINTENANT + 3, { operationId: 'fraude1', montant: 1000, mode: 'especes' }))).toBe(0);
+      expect(await refuses(caissier, o, enreg('paiements', 'pf2', MAINTENANT + 4, { operationId: 'dep-vraie', montant: 1000, mode: 'especes' }))).toBe(1);
+      const vus = ((await sync(patron, 0)).json() as ReponseSync).changements.map((c) => c.enregistrement);
+      expect(vus.find((e) => e.id === 'fraude1')).toMatchObject({ sens: 'recette', montant: 1000 });
+      expect(vus.find((e) => e.id === 'pf2')).toMatchObject({ operationId: 'fraude1' });
+    });
+
+    it('un faux « salaire » (employé inventé) ne permet pas de valider une dépense', async () => {
+      const patron = await seConnecter(banc, '77 800 00 03');
+      const o = patron.organisationId;
+      await sync(patron, 0, [enreg('employes', 'emp1', MAINTENANT, { nom: 'Moussa', salaire: 45000 })]);
+      await inviter(patron, { telephone: '77 800 00 04', role: 'personnalise', droits: ['salaires.voir', 'salaires.payer'] });
+      const payeur = await seConnecter(banc, '77 800 00 04');
+      expect(await refuses(payeur, o, enreg('operations', 'faux-sal', MAINTENANT + 1, { sens: 'depense', categorie: 'materiel', montant: 2000000, employeId: 'inexistant' }))).toBe(1);
+      expect(await refuses(payeur, o, enreg('operations', 'vrai-sal', MAINTENANT + 1, { sens: 'depense', categorie: 'main_oeuvre', montant: 45000, employeId: 'emp1' }))).toBe(0);
+      expect(await refuses(payeur, o, enreg('paiements', 'p-vrai-sal', MAINTENANT + 2, { operationId: 'vrai-sal', montant: 45000, mode: 'wave' }))).toBe(0);
+    });
+
+    it('un achat de stock payé demande le droit de valider les achats', async () => {
+      const patron = await seConnecter(banc, '77 800 00 05');
+      const o = patron.organisationId;
+      await inviter(patron, { telephone: '77 800 00 06', role: 'personnalise', droits: ['saisie.stock', 'cheptel.voir'] });
+      const magasinier = await seConnecter(banc, '77 800 00 06');
+      expect(await refuses(magasinier, o, enreg('entreesStock', 'st-cher', MAINTENANT, { date: '2026-09-21', quantiteKg: 50, prixTotal: 750000, mode: 'especes' }))).toBe(1);
+      expect(await refuses(magasinier, o, enreg('entreesStock', 'st-sans-prix', MAINTENANT, { date: '2026-09-21', quantiteKg: 50 }))).toBe(0);
+    });
+
+    it('annuler ou rétablir suit le sens enregistré et demande le droit d’annuler ; une arrivée ne se ramène pas à zéro', async () => {
+      const patron = await seConnecter(banc, '77 800 00 07');
+      const o = patron.organisationId;
+      await sync(patron, 0, [
+        enreg('operations', 'sal1', MAINTENANT, { sens: 'depense', categorie: 'main_oeuvre', montant: 85000 }),
+        enreg('lots', 'lB', MAINTENANT, { nom: 'Lot B' }),
+        enreg('mouvements', 'mvB', MAINTENANT, { lotId: 'lB', type: 'arrivee', quantite: 500 }),
+        enreg('pontes', 'po-annulee', MAINTENANT, { lotId: 'lB', nombre: 30, supprimeLe: MAINTENANT }),
+      ]);
+      await inviter(patron, { telephone: '77 800 00 08', role: 'personnalise', droits: ['finances.annuler_vente', 'finances.saisir_facture', 'finances.voir_recettes'] });
+      await inviter(patron, { telephone: '77 800 00 09', role: 'soigneur' });
+      const vendeur = await seConnecter(banc, '77 800 00 08');
+      const soigneur = await seConnecter(banc, '77 800 00 09');
+      expect(await refuses(vendeur, o, enreg('operations', 'sal1', MAINTENANT + 1, { sens: 'recette', supprimeLe: MAINTENANT + 1 }))).toBe(1);
+      expect(await refuses(soigneur, o, enreg('mouvements', 'mvB', MAINTENANT + 1, { lotId: 'lB', type: 'arrivee', quantite: 0 }))).toBe(1);
+      expect(await refuses(soigneur, o, enreg('pontes', 'po-annulee', MAINTENANT + 1, { lotId: 'lB', nombre: 30 }))).toBe(1);
+      const vus = ((await sync(patron, 0)).json() as ReponseSync).changements.map((c) => c.enregistrement);
+      expect(vus.find((e) => e.id === 'sal1')).toMatchObject({ montant: 85000 });
+      expect(vus.find((e) => e.id === 'mvB')).toMatchObject({ quantite: 500 });
+      expect(vus.find((e) => e.id === 'po-annulee')?.supprimeLe).toBeTruthy();
+    });
+
+    it('refuse une fiche venue du futur ou mal formée', async () => {
+      const patron = await seConnecter(banc, '77 800 00 10');
+      const o = patron.organisationId;
+      const futur = banc.horloge.maintenant.getTime() + 3 * 86_400_000;
+      expect(await refuses(patron, o, enreg('pontes', 'p-futur', futur, { lotId: 'l', nombre: 3 }))).toBe(1);
+      expect(await refuses(patron, o, enreg('lots', 'l-piege', MAINTENANT, { nom: { piege: 1 } }))).toBe(1);
+      expect(await refuses(patron, o, enreg('pontes', 'p-piege', MAINTENANT, { date: { x: 1 }, nombre: 'abc' }))).toBe(1);
+      expect(await refuses(patron, o, enreg('profil', 'elevage', MAINTENANT, { nom: 'Ferme', logo: 'https://espion.example/pixel.png' }))).toBe(1);
+      expect(await refuses(patron, o, enreg('pontes', 'p-ok', MAINTENANT, { lotId: 'l', nombre: 3, date: '2026-09-21' }))).toBe(0);
+    });
+
+    it('ceux qui ne voient pas les finances ne reçoivent ni les prix du stock, ni le carnet, ni les montants du journal', async () => {
+      const patron = await seConnecter(banc, '77 800 00 11');
+      const o = patron.organisationId;
+      await sync(patron, 0, [
+        enreg('entreesStock', 'st1', MAINTENANT, { date: '2026-09-21', quantiteKg: 50, prixTotal: 30000, mode: 'wave' }),
+        enreg('tiers', 't1', MAINTENANT, { nom: 'Boutique Awa', telephone: '+221771112233' }),
+        enreg('operations', 'o1', MAINTENANT, { sens: 'depense', categorie: 'soins', montant: 85000 }),
+      ]);
+      await inviter(patron, { telephone: '77 800 00 12', role: 'personnalise', droits: ['cheptel.voir', 'saisie.stock', 'saisie.annuler', 'admin.journal'] });
+      const aide = await seConnecter(banc, '77 800 00 12');
+      const vus = ((await sync(aide, 0, [], o)).json() as ReponseSync).changements;
+      const stock = vus.find((c) => c.enregistrement.id === 'st1')!.enregistrement;
+      expect(stock['quantiteKg']).toBe(50);
+      expect(stock['prixTotal']).toBeUndefined();
+      expect(stock['mode']).toBeUndefined();
+      expect(vus.some((c) => c.table === 'tiers')).toBe(false);
+      // Il peut quand même annuler l'entrée de stock : le prix enregistré est conservé.
+      expect(await refuses(aide, o, { table: 'entreesStock', enregistrement: { ...stock, misAJour: MAINTENANT + 1, supprimeLe: MAINTENANT + 1 } })).toBe(0);
+      const cote = ((await sync(patron, 0)).json() as ReponseSync).changements.find((c) => c.enregistrement.id === 'st1')!.enregistrement;
+      expect(cote).toMatchObject({ prixTotal: 30000, mode: 'wave' });
+      const j = (await get(`/v1/organisations/${o}/journal`, aide)).json() as { entrees: EntreeJournal[] };
+      const op = j.entrees.find((x) => x.enregistrementId === 'o1')!;
+      expect(op.description).toBe('');
+      expect(JSON.stringify(j.entrees)).not.toMatch(/85\s000|30\s000/);
+    });
+
+    it('le responsable d’un bâtiment ne peut pas tirer vers son bâtiment une fiche d’un autre bâtiment', async () => {
+      const patron = await seConnecter(banc, '77 800 00 13');
+      const o = patron.organisationId;
+      await sync(patron, 0, [
+        enreg('logements', 'A', MAINTENANT, { nom: 'A' }), enreg('logements', 'B', MAINTENANT, { nom: 'B' }),
+        enreg('lots', 'lA', MAINTENANT, { nom: 'Lot A', logementId: 'A' }), enreg('lots', 'lB', MAINTENANT, { nom: 'Lot B', logementId: 'B' }),
+        enreg('quarantaines', 'qB', MAINTENANT, { nom: 'Arrivage B', lotId: 'lB', logementId: 'B' }),
+      ]);
+      await inviter(patron, { telephone: '77 800 00 14', role: 'personnalise', zones: ['A'], droits: ['quarantaine.arrivee', 'quarantaine.voir', 'cheptel.voir'] });
+      const resp = await seConnecter(banc, '77 800 00 14');
+      expect(await refuses(resp, o, enreg('quarantaines', 'qB', MAINTENANT + 1, { nom: 'Arrivage B', lotId: 'lA', logementId: 'A' }))).toBe(1);
+    });
+  });
+
+  describe('blocage par adresse', () => {
+    it('quelqu’un qui se trompe exprès sur le compte du propriétaire ne bloque que son propre téléphone', async () => {
+      await creerProprietaire(banc, 'patron.vise');
+      const depuis = (ip: string, motDePasse: string) => banc.app.inject({ method: 'POST', url: '/v1/auth/connexion', payload: { identifiant: 'patron.vise', motDePasse }, remoteAddress: ip });
+      for (let i = 0; i < 6; i++) await depuis('192.168.1.66', 'faux-mot-1');
+      expect((await depuis('192.168.1.66', MOT_DE_PASSE_TEST)).statusCode).toBe(429);
+      expect((await depuis('192.168.1.20', MOT_DE_PASSE_TEST)).statusCode).toBe(200);
+    });
+
+    it('une rafale d’essais simultanés ne bloque que pour la durée d’un seul blocage', async () => {
+      await creerProprietaire(banc, 'rafale.essai');
+      await Promise.all(Array.from({ length: 30 }, (_, i) => connexion('rafale.essai', `faux-${i}-mot`)));
+      expect((await connexion('rafale.essai', MOT_DE_PASSE_TEST)).json().erreur).toMatch(/15 minutes/);
+    });
+  });
+
   describe('journal d’activité', () => {
     const journal = async (s: Session, requete = '', org = s.organisationId) => get(`/v1/organisations/${org}/journal${requete}`, s);
 
@@ -835,12 +962,17 @@ describe.skipIf(!URL_BASE_TEST)('serveur (PostgreSQL requis : TEST_DATABASE_URL)
       const ponte = (t: number, extra: Record<string, unknown> = {}) => enreg('pontes', 'p1', MAINTENANT + t, { nombre: 9, casses: 0, lotId: 'l', ...extra });
       await sync(aide, 0, [ponte(1)], org);
       await sync(aide, 0, [ponte(1)], org);
-      await sync(aide, 0, [ponte(2, { nombre: 10 })], org);
-      await sync(aide, 0, [ponte(3, { nombre: 10, supprimeLe: MAINTENANT + 3 })], org);
+      // Une ponte enregistrée ne se réécrit pas : on l'annule et on la refait.
+      expect(((await sync(aide, 0, [ponte(2, { nombre: 10 })], org)).json() as ReponseSync).refuses).toBe(1);
+      await sync(aide, 0, [ponte(3, { supprimeLe: MAINTENANT + 3 })], org);
+      // Un lot, lui, se modifie (nom, bâtiment…).
+      await sync(patron, 0, [enreg('lots', 'lot-j', MAINTENANT + 1, { nom: 'Soie' })]);
+      await sync(patron, 0, [enreg('lots', 'lot-j', MAINTENANT + 2, { nom: 'Soie blanche' })]);
       const r = (await journal(patron)).json() as { entrees: EntreeJournal[]; reste: boolean };
       const ponteEntrees = r.entrees.filter((x) => x.table === 'pontes');
-      expect(ponteEntrees.map((x) => x.action)).toEqual(['annulation', 'modification', 'creation']);
-      expect(ponteEntrees[2]).toMatchObject({ identifiant: aide.identifiant, nom: 'Awa Fall', fonction: 'Aide', description: '9 œufs', faitLe: MAINTENANT + 1, enregistrementId: 'p1' });
+      expect(ponteEntrees.map((x) => x.action)).toEqual(['annulation', 'creation']);
+      expect(ponteEntrees[1]).toMatchObject({ identifiant: aide.identifiant, nom: 'Awa Fall', fonction: 'Aide', description: '9 œufs', faitLe: MAINTENANT + 1, enregistrementId: 'p1' });
+      expect(r.entrees.filter((x) => x.table === 'lots').map((x) => x.action)).toEqual(['modification', 'creation']);
     });
 
     it('ne note pas ce qui a été refusé', async () => {

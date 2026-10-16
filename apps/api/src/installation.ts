@@ -4,6 +4,9 @@ import { genererMotDePasseProvisoire, hacherMotDePasse, type CoutMotDePasse } fr
 
 const JOUR_MS = 86_400_000;
 
+/** Efface les échecs d'un identifiant depuis toutes les adresses (clés « identifiant|adresse »). */
+export const SQL_OUBLIER_TOUS_LES_ECHECS = `DELETE FROM echecs_connexion WHERE cle = $1 OR left(cle, length($1) + 1) = $1 || '|'`;
+
 /** Vrai tant qu'aucun propriétaire n'a de mot de passe : le serveur crée alors lui-même le compte administrateur au démarrage. */
 export async function sansAdministrateur(executeur: Pick<Pool, 'query'>): Promise<boolean> {
   const r = await executeur.query(`SELECT 1 FROM membres m JOIN utilisateurs u ON u.id = m.utilisateur_id WHERE m.role = 'proprietaire' AND u.mot_de_passe_hash IS NOT NULL LIMIT 1`);
@@ -65,7 +68,7 @@ export async function reinitialiserDepuisLeServeur(pool: Pool, cout: CoutMotDePa
     )).rows[0];
     if (!u) throw new Error(`Aucun compte n’a l’identifiant « ${identifiant} ».`);
     await c.query('DELETE FROM sessions WHERE utilisateur_id = $1', [u.id]);
-    await c.query('DELETE FROM echecs_connexion WHERE cle = $1', [identifiant]);
+    await c.query(SQL_OUBLIER_TOUS_LES_ECHECS, [identifiant]);
     const orgs = await c.query<{ organisation_id: string; fonction: string | null }>('SELECT organisation_id, fonction FROM membres WHERE utilisateur_id = $1', [u.id]);
     for (const o of orgs.rows) {
       await c.query(
