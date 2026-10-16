@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dev-dist/
+*.log
+.DS_Store
+apps/web/e2e/*.png
+dist-apercu/
+.env
+.env.*
+*.pem
+*.key

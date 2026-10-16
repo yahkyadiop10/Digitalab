@@ -1,0 +1,243 @@
+import { ajouterJours, ecartJours, jourLocal } from './dates';
+import { decesEntre, effectifs } from './effectif';
+import { incubationsEnCours, profilDe, suivreEtapes } from './incubation';
+import { delaisEnCours, vaccinsAFaire } from './sante';
+import { derniereNote, quarantainesActives, suivreQuarantaine } from './quarantaine';
+import type {
+  Alerte,
+  DonneesElevage,
+  EspeceConfig,
+  Niveau,
+  ProtocoleVaccin,
+  Ponte,
+  Seuils,
+} from './types';
+
+export interface EntreeAlertes extends DonneesElevage {
+  maintenant: Date;
+  especes: Record<string, EspeceConfig>;
+  seuils: Seuils;
+  protocoles: ProtocoleVaccin[];
+}
+
+const RANG: Record<Niveau, number> = { jaune: 1, orange: 2, rouge: 3 };
+export const rangNiveau = (n: Niveau): number => RANG[n];
+
+const arrondi = (x: number, d = 1) => Math.round(x * 10 ** d) / 10 ** d;
+const vivants = <T extends { supprimeLe?: number | null }>(xs: T[]) => xs.filter((x) => !x.supprimeLe);
+
+/** Évalue toutes les règles de la phase 1 et renvoie les alertes, la plus grave d'abord. */
+export function evaluerAlertes(e: EntreeAlertes): Alerte[] {
+  const alertes: Alerte[] = [
+    ...alertesDensite(e),
+    ...alertesMortalite(e),
+    ...alertesPonte(e),
+    ...alertesStockAliment(e),
+    ...alertesIncubation(e),
+    ...alertesSante(e),
+    ...alertesQuarantaine(e),
+  ];
+  return alertes.sort((a, b) => RANG[b.niveau] - RANG[a.niveau] || a.cle.localeCompare(b.cle));
+}
+
+function alertesDensite(e: EntreeAlertes): Alerte[] {
+  const eff = effectifs(e.mouvements);
+  const out: Alerte[] = [];
+  for (const lg of vivants(e.logements)) {
+    if (!lg.surfaceM2 || lg.surfaceM2 <= 0) continue;
+    let besoin = 0;
+    for (const lot of vivants(e.lots)) {
+      if (lot.archive || lot.logementId !== lg.id) continue;
+      const espece = e.especes[lot.especeCode];
+      besoin += (eff.get(lot.id) ?? 0) * (espece?.m2ParAnimal ?? 0);
+    }
+    const ratio = besoin / lg.surfaceM2;
+    const s = e.seuils.densite;
+    const niveau: Niveau | null = ratio >= s.rouge ? 'rouge' : ratio >= s.orange ? 'orange' : ratio >= s.jaune ? 'jaune' : null;
+    if (niveau) out.push({ cle: `densite:${lg.id}`, code: 'densite', niveau, logementId: lg.id, params: { pct: Math.round(ratio * 100) } });
+  }
+  return out;
+}
+
+function niveauMortalite(taux: number, deces: number, seuil: { orange: number; rouge: number }, minDeces: number): Niveau | null {
+  if (deces <= 0) return null;
+  if (taux >= seuil.rouge && deces >= minDeces) return 'rouge';
+  if (taux >= seuil.orange && deces >= minDeces) return 'orange';
+  // Un seul décès dans un petit lot : à noter, sans alarme.
+  if (taux >= seuil.orange) return 'jaune';
+  return null;
+}
+
+function alertesMortalite(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const eff = effectifs(e.mouvements);
+  const out: Alerte[] = [];
+  for (const lot of vivants(e.lots)) {
+    if (lot.archive) continue;
+    const reste = eff.get(lot.id) ?? 0;
+    const candidats: { niveau: Niveau; jours: number; deces: number; taux: number }[] = [];
+    for (const [jours, seuil] of [[1, e.seuils.mortalite1j], [7, e.seuils.mortalite7j]] as const) {
+      const deces = decesEntre(e.mouvements, lot.id, ajouterJours(aujourdhui, -(jours - 1)), aujourdhui);
+      const base = reste + deces;
+      if (base <= 0) continue;
+      const taux = (deces / base) * 100;
+      const niveau = niveauMortalite(taux, deces, seuil, e.seuils.minDeces);
+      if (niveau) candidats.push({ niveau, jours, deces, taux });
+    }
+    // Le niveau le plus grave l'emporte ; à égalité, la fenêtre la plus courte.
+    candidats.sort((a, b) => RANG[b.niveau] - RANG[a.niveau] || a.jours - b.jours);
+    const c = candidats[0];
+    if (c) out.push({ cle: `mortalite:${lot.id}:${aujourdhui}`, code: 'mortalite', niveau: c.niveau, lotId: lot.id, params: { deces: c.deces, jours: c.jours, taux: arrondi(c.taux) } });
+  }
+  return out;
+}
+
+function totalParJour(pontes: Ponte[], lotId: string): Map<string, number> {
+  const par = new Map<string, number>();
+  for (const p of vivants(pontes)) if (p.lotId === lotId) par.set(p.date, (par.get(p.date) ?? 0) + p.nombre);
+  return par;
+}
+
+function alertesPonte(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  // La ponte du jour n'est comparée qu'une fois la collecte terminée.
+  const jourBilan = e.maintenant.getHours() >= e.seuils.heureBilanPonte ? aujourdhui : ajouterJours(aujourdhui, -1);
+  const out: Alerte[] = [];
+  for (const lot of vivants(e.lots)) {
+    if (lot.archive || !e.especes[lot.especeCode]?.pondeuse) continue;
+    const parJour = totalParJour(e.pontes, lot.id);
+    const valeur = parJour.get(jourBilan);
+    if (valeur === undefined) continue;
+    const precedents = [...parJour.entries()]
+      .filter(([j]) => j < jourBilan && j >= ajouterJours(jourBilan, -7))
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .slice(0, 3)
+      .map(([, n]) => n);
+    if (precedents.length < 2) continue;
+    const moyenne = precedents.reduce((a, b) => a + b, 0) / precedents.length;
+    if (moyenne < 3) continue; // trop peu d'œufs pour conclure
+    const ratio = valeur / moyenne;
+    const niveau: Niveau | null = ratio < e.seuils.ponte.rouge ? 'rouge' : ratio < e.seuils.ponte.orange ? 'orange' : null;
+    if (niveau) out.push({ cle: `chute_ponte:${lot.id}:${jourBilan}`, code: 'chute_ponte', niveau, lotId: lot.id, params: { valeur, moyenne: arrondi(moyenne), pct: Math.round(ratio * 100) } });
+  }
+  return out;
+}
+
+/** Stock d'aliment en kg : entrées moins distributions. */
+export function stockAlimentKg(e: Pick<DonneesElevage, 'entreesStock' | 'distributions'>): number {
+  const entrees = vivants(e.entreesStock).reduce((a, x) => a + x.quantiteKg, 0);
+  const sorties = vivants(e.distributions).reduce((a, x) => a + x.quantiteKg, 0);
+  return arrondi(entrees - sorties, 2);
+}
+
+/** Consommation moyenne par jour sur les 7 derniers jours (jours renseignés seulement). */
+export function consommationMoyenneKg(e: Pick<DonneesElevage, 'distributions'>, aujourdhui: string): number | null {
+  const debut = ajouterJours(aujourdhui, -6);
+  const parJour = new Map<string, number>();
+  for (const d of vivants(e.distributions)) {
+    if (d.date >= debut && d.date <= aujourdhui) parJour.set(d.date, (parJour.get(d.date) ?? 0) + d.quantiteKg);
+  }
+  if (parJour.size === 0) return null;
+  return [...parJour.values()].reduce((a, b) => a + b, 0) / parJour.size;
+}
+
+function alertesStockAliment(e: EntreeAlertes): Alerte[] {
+  // Le suivi du stock est facultatif : sans aucune entrée enregistrée, aucune alerte.
+  if (vivants(e.entreesStock).length === 0) return [];
+  const aujourdhui = jourLocal(e.maintenant);
+  const stock = stockAlimentKg(e);
+  const conso = consommationMoyenneKg(e, aujourdhui);
+  if (stock <= 0) return [{ cle: 'stock_aliment', code: 'stock_aliment', niveau: 'rouge', params: { stock: 0, jours: 0 } }];
+  if (conso === null || conso <= 0) return [];
+  const jours = stock / conso;
+  const s = e.seuils.autonomieAliment;
+  const niveau: Niveau | null = jours < s.orange ? 'orange' : jours < s.jaune ? 'jaune' : null;
+  return niveau ? [{ cle: 'stock_aliment', code: 'stock_aliment', niveau, params: { stock, jours: arrondi(jours) } }] : [];
+}
+
+/** Niveau d'une alerte d'incubation : avertissement la veille (jaune), action du jour (orange), retard (orange, rouge pour l'arrêt du retournement et le transfert, qui jouent sur l'éclosion). */
+function niveauIncubation(type: string, statut: 'bientot' | 'aujourdhui' | 'retard'): Niveau {
+  if (statut === 'bientot') return 'jaune';
+  if (statut === 'aujourdhui') return 'orange';
+  return type === 'retournement' || type === 'transfert' ? 'rouge' : 'orange';
+}
+
+function alertesIncubation(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const out: Alerte[] = [];
+  for (const inc of incubationsEnCours(e.incubations)) {
+    const profil = profilDe(e.especes, inc.especeCode);
+    if (!profil) continue;
+    const couveuse = e.couveuses.find((c) => c.id === inc.couveuseId && !c.supprimeLe);
+    for (const etape of suivreEtapes(inc, profil, e.mirages, aujourdhui, couveuse?.eclosoirSepare ?? false)) {
+      if (etape.statut !== 'bientot' && etape.statut !== 'aujourdhui' && etape.statut !== 'retard') continue;
+      out.push({
+        cle: `incubation:${inc.id}:${etape.cle}:${etape.statut}`,
+        code: 'incubation',
+        niveau: niveauIncubation(etape.type, etape.statut),
+        incubationId: inc.id,
+        etape: etape.type,
+        params: { jourJ: etape.jourJ, retard: etape.retard, dans: etape.dans, auto: couveuse?.type === 'automatique' ? 1 : 0, separe: couveuse?.eclosoirSepare ? 1 : 0 },
+      });
+    }
+  }
+  return out;
+}
+
+function alertesSante(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const out: Alerte[] = [];
+
+  for (const v of vaccinsAFaire(e.lots, e.mouvements, e.evenementsSante, e.protocoles, aujourdhui)) {
+    if (v.statut === 'a_renseigner') continue;
+    const niveau: Niveau = v.statut === 'bientot' ? 'jaune' : v.statut === 'aujourdhui' ? 'orange' : v.retard > 7 ? 'rouge' : 'orange';
+    out.push({ cle: `vaccin:${v.lot.id}:${v.protocole.id}:${v.statut}`, code: 'vaccin', niveau, lotId: v.lot.id, libelle: v.protocole.nom, params: { retard: v.retard, dans: v.dans } });
+  }
+
+  for (const d of delaisEnCours(e.evenementsSante, aujourdhui)) {
+    out.push({
+      cle: `delai:${d.evenement.id}`, code: 'delai_attente', niveau: 'jaune', lotId: d.evenement.lotId,
+      libelle: d.evenement.nom ?? 'traitement',
+      params: { jours: ecartJours(aujourdhui, d.jusqua) + 1, enCours: d.enCours ? 1 : 0 },
+    });
+  }
+
+  const recents = e.evenementsSante.filter((x) => !x.supprimeLe && x.type === 'observation' && x.date >= ajouterJours(aujourdhui, -2) && x.date <= aujourdhui);
+  for (const o of recents) {
+    if (o.gravite === 3 || o.gravite === 2) {
+      out.push({ cle: `grave:${o.id}`, code: 'sante_grave', niveau: o.gravite === 3 ? 'rouge' : 'orange', lotId: o.lotId, params: { gravite: o.gravite, symptomes: o.symptomes?.length ?? 0 } });
+    }
+  }
+
+  // Plusieurs lots du même local avec des symptômes inquiétants : possible foyer.
+  const parLocal = new Map<string, Set<string>>();
+  for (const o of recents) {
+    if ((o.gravite ?? 1) < 2) continue;
+    const lot = e.lots.find((l) => l.id === o.lotId);
+    if (!lot?.logementId) continue;
+    parLocal.set(lot.logementId, (parLocal.get(lot.logementId) ?? new Set()).add(lot.id));
+  }
+  for (const [logementId, lotsTouches] of parLocal) {
+    if (lotsTouches.size >= 2) out.push({ cle: `foyer:${logementId}:${aujourdhui}`, code: 'foyer', niveau: 'rouge', logementId, params: { lots: lotsTouches.size } });
+  }
+  return out;
+}
+
+function alertesQuarantaine(e: EntreeAlertes): Alerte[] {
+  const aujourdhui = jourLocal(e.maintenant);
+  const out: Alerte[] = [];
+  for (const q of quarantainesActives(e.quarantaines)) {
+    const s = suivreQuarantaine(q, aujourdhui);
+    if (s.statut === 'fin_proche' || s.statut === 'a_decider') {
+      out.push({
+        cle: `quarantaine:${q.id}:fin:${s.statut}`, code: 'quarantaine', niveau: s.statut === 'a_decider' ? 'orange' : 'jaune',
+        quarantaineId: q.id, lotId: q.lotId, etape: 'fin', params: { restants: s.joursRestants, retard: Math.max(0, -s.joursRestants) },
+      });
+    }
+    const note = derniereNote(e.notesQuarantaine, q.id);
+    if (note && note.etat === 'inquietant' && note.date >= ajouterJours(aujourdhui, -1)) {
+      out.push({ cle: `quarantaine:${q.id}:inquiet:${note.id}`, code: 'quarantaine', niveau: 'orange', quarantaineId: q.id, lotId: q.lotId, etape: 'inquiet', params: { malades: note.malades ?? 0 } });
+    }
+  }
+  return out;
+}
